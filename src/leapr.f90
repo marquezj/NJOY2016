@@ -157,6 +157,16 @@ contains
    !                   1   vineyard
    !                   2   skold
    !
+   !            Combinations of ncold and nsk allow the use of
+   !            different cold hydrogen models:
+   !
+   !            ncold=1/2/3/4 nsk=0: ENDF/B-VI models, (+)
+   !            ncold=1/2/3/4 nsk=1: Granada model with Vineyard approximation, (*)
+   !            ncold=1/2/3/4 nsk=2: Granada model with Skold approximation, (*)
+   !
+   !            (+) Scattering lengths are hard coded.
+   !            (*) Scattering lengths are computed from spr and cfrac.
+   !
    ! card 6 - secondary scatterer control
    !    nss     number of secondary scatterers (0 or 1)
    !    b7      secondary scatterer type
@@ -352,14 +362,18 @@ contains
                if (allocated(ska)) deallocate(ska)
                allocate(ska(nka))
                read(nsysi,*) (ska(i),i=1,nka)
+               if (ncold.gt.0) then
+                  write(nsyso,'(/'' s(kappa) for COLDH'')')
+               else
                if (nsk.eq.1) write(nsyso,'(/'' s(kappa) for vineyard method'')')
                if (nsk.eq.2) write(nsyso,'(/'' s(kappa) for skold method'')')
+               endif
                do i=1,nka
                   write(nsyso,'(1p,2e12.4)') dka*i,ska(i)
                enddo
             endif
 
-            !--read in coherent fraction for skold method
+            !--read in coherent fraction for skold or vineyard method
             if (nsk.gt.0) read(nsysi,*) cfrac
 
          endif
@@ -426,7 +440,8 @@ contains
    deallocate(dwp1)
    deallocate(tempf)
    deallocate(tempf1)
-
+   if (allocated(ssp)) deallocate(ssp)
+   if (allocated(ska)) deallocate(ska)
    !--finished
    call closz(nout)
    call timer(time)
@@ -1905,22 +1920,26 @@ contains
    use physics ! provides pi,bk,hbar,ev
    use mainio  ! provides nsyso
    use util    ! provides timer
+   use endf    ! provides terp1
    ! externals
    integer::itemp
    real(kr)::temp
    ! internals
    real(kr)::time,tev,sc,de,x,amassm,bp,sampc,sampi
-   real(kr)::snlg,betap,bn,ex,add,snlk,up,down,sn,snorm
+   real(kr)::snlg,betap,bn,ex,add,snlk,up,down,snorm
    real(kr)::sum0,bel,ff1,ff2,ff1l,ff2l,tmp,total,be
-   real(kr)::al,alp,waven,y,sk,swe,swo,wt,tbart,pj
-   integer::i,j,k,l,jj,jjmax,jprt,nbx,maxbb
+   real(kr)::al,alp,waven,y,sk,swe,swo,wt,tbart,pj,Dm
+   real(kr)::addbeta0,addbeta1,addbeta1a,addbeta1b,ap
+   integer::i,j,k,l,jj,jjmax,jprt,nbx,maxbb,kk,kk2,sn_size
    integer::law,nal,iprt,ipo,jt1,lp,jp,nbe
    real(kr),dimension(:),allocatable::betan,exb
    real(kr),dimension(:),allocatable::bex,rdbex,sex
+   real(kr),dimension(:,:),allocatable::sn
    real(kr),parameter::pmass=1.6726231e-24_kr
    real(kr),parameter::dmass=3.343586e-24_kr
    real(kr),parameter::deh=0.0147e0_kr
    real(kr),parameter::ded=0.0074e0_kr
+   real(kr),parameter::dhh=0.7414e0_kr
    real(kr),parameter::amassh=3.3465e-24_kr
    real(kr),parameter::amassd=6.69e-24_kr
    real(kr),parameter::sampch=0.356e0_kr
@@ -1947,6 +1966,8 @@ contains
    allocate(bex(maxbb))
    allocate(rdbex(maxbb))
    allocate(sex(maxbb))
+   sn_size = 2*nbeta-1
+   allocate(sn(nalpha,sn_size))
 
    !--set up constants
    tev=bk*abs(temp)
@@ -1958,13 +1979,30 @@ contains
    x=de/tev
    amassm=amassh
    if (law.gt.3) amassm=amassd
+   if (nsk.ne.0) then
+      sampc = sqrt(cfrac*spr/(4*pi))/(awr/(1.0+awr))
+      sampi = sqrt((1-cfrac)*spr/(4*pi))/(awr/(1.0+awr))
+      bp = dhh/2
+   else
+!
+! Scattering lengths are hard coded for old input files
+!
    bp=hbar/2*sqrt(2/deh/ev/pmass)/angst
    if (law.gt.3) bp=hbar/2*sqrt(2/ded/ev/dmass)/angst
    sampc=sampch
    if (law.gt.3) sampc=sampcd
    sampi=sampih
    if (law.gt.3) sampi=sampid
+   endif
    wt=twt+tbeta
+   if (nsk.eq.0) then
+!
+! Add the weight from oscillators
+!
+      do i=1,nd
+        wt = wt + adel(i)
+      enddo
+   endif
    tbart=tempf(itemp)/tempr(itemp)
 
    !--main alpha loop
@@ -1985,6 +2023,10 @@ contains
       endif
 
       !--spin-correlation factors
+      if (nsk.eq.0) then
+!
+! Original H2, D2 inputs
+!      
       if (law.eq.2) swe=sampi**2/3
       if (law.eq.2) swo=sk*sampc**2+2*sampi**2/3
       if (law.eq.3) swe=sk*sampc**2
@@ -1993,9 +2035,26 @@ contains
       if (law.eq.4) swo=3*sampi**2/8
       if (law.eq.5) swe=3*sampi**2/4
       if (law.eq.5) swo=sk*sampc**2+sampi**2/4
+      else
+!
+! New H2, D2 inputs
+!      
+          if (law.eq.2) swe=sampi**2/3
+          if (law.eq.2) swo=sampc**2+2*sampi**2/3
+          if (law.eq.3) swe=sampc**2
+          if (law.eq.3) swo=sampi**2
+          if (law.eq.4) swe=sampc**2+5*sampi**2/8
+          if (law.eq.4) swo=3*sampi**2/8
+          if (law.eq.5) swe=3*sampi**2/4
+          if (law.eq.5) swo=sampc**2+sampi**2/4
+!
+! Weight for S_out term
+!
+      endif
       snorm=sampi**2+sampc**2
       swe=swe/snorm
       swo=swo/snorm
+      Dm=2.d0*sampc**2/snorm
 
       !--prepare arrays for sint
       if (nal.eq.1) then
@@ -2007,6 +2066,7 @@ contains
          enddo
          call bfill(bex,rdbex,nbx,betan,nbeta,maxbb)
       endif
+      if (nsk.eq.0) then
       call exts(ssm(1,nal,itemp),sex,exb,betan,nbeta,maxbb)
 
       !--loop over all beta values
@@ -2018,7 +2078,7 @@ contains
          if (jj.ge.nbeta) k=jj-nbeta+1
          be=betan(k)
          if (jj.lt.nbeta) be=-be
-         sn=0
+            sn(nal,jj)=0
          total=0
 
          !--loop over all oscillators
@@ -2077,17 +2137,135 @@ contains
             enddo
 
             !--continue the j loop
-            sn=sn+snlg+snlk
+               sn(nal,jj)=sn(nal,jj)+snlg+snlk
+            enddo
+            if (jj.eq.1.and.iprt.eq.1) then
+               write(nsyso,'(5x,''total'',5x,f10.6)') total
+            endif
+         enddo
+      else
+         !--loop over all beta values
+         !    results for positive beta go into ssp
+         !    results for negative beta go into ssm
+         jjmax=2*nbeta-1
+         do jj=1,jjmax
+         call exts(ssm(1,nal,itemp),sex,exb,betan,nbeta,maxbb)
+            if (jj.lt.nbeta) k=nbeta-jj+1
+            if (jj.ge.nbeta) k=jj-nbeta+1
+            be=betan(k)
+            if (jj.lt.nbeta) be=-be
+            sn(nal,jj)=0
+            total=0
+   
+            !--loop over all oscillators
+            ! para-h2: j=0,2,....; ortho-h2: j=1,3,....
+            ! ortho-d2: j=0,2,....; para-d2: j=1,3,....
+            ipo=1
+            if (law.eq.2.or.law.eq.5) ipo=2
+            jt1=2*jterm
+            if (ipo.eq.2) jt1=jt1+1
+            do l=ipo,jt1,2
+               j=l-1
+               call bt(j,pj,x)
+   
+               !--sum over even values of j-prime
+               snlg=0
+               do lp=1,10,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swe*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlg=snlg+tmp*add
+               enddo
+   
+               !--sum over the odd values of j-prime
+               snlk=0
+               do lp=2,10,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swo*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlk=snlk+tmp*add
+               enddo
+   
+               !--continue the j loop
+               sn(nal,jj)=sn(nal,jj)+snlg+snlk
          enddo
          if (jj.eq.1.and.iprt.eq.1) then
             write(nsyso,'(5x,''total'',5x,f10.6)') total
          endif
 
          !--continue the beta loop
-         if (jj.le.nbeta) ssm(k,nal,itemp)=sn
-         if (jj.ge.nbeta) ssp(k,nal,itemp)=sn
+            if (nsk.eq.1) then
+!
+! Compute the S_out term using Vineyard approximation
+!            
+               addbeta0=sint(be,bex,rdbex,sex,nbx,al,wt,tbart,beta,nbeta, &
+       maxbb)                                                                   
+               sn(nal,jj)=sn(nal,jj)+  &
+       (sk-1.d0)*sjbes(0,y)**2*addbeta0*Dm 
+            else if (nsk.eq.2) then
+!
+! Compute the S_out term using Skold approximation
+!            
+               addbeta0=sint(be,bex,rdbex,sex,nbx,al,wt,tbart,beta,nbeta, &          
+                maxbb)
+               ap=al/sk
+               do kk2=1,nalpha
+                  kk=kk2
+                  if (ap.lt.alpha(kk2)) exit
+               enddo
+               if (kk.eq.1) kk=2
+               call exts(ssm(1,kk-1,itemp),sex,exb,beta,nbeta,maxbb)            
+               addbeta1a=sint(be,bex,rdbex,sex,nbx,alpha(kk-1), &
+                wt,tbart,beta,nbeta, maxbb)
+               call exts(ssm(1,kk,itemp),sex,exb,beta,nbeta,maxbb)            
+               addbeta1b=sint(be,bex,rdbex,sex,nbx,alpha(kk), &
+                wt,tbart,beta,nbeta, maxbb)            
+               call terp1(alpha(kk-1),addbeta1a, alpha(kk),addbeta1b, &
+                ap, addbeta1, 5)                 
+               addbeta1=addbeta1*sk
+               sn(nal, jj)=sn(nal,jj)+ &
+                (addbeta1-addbeta0)*sjbes(0,y)**2*Dm
+            endif
+         enddo
+      endif
+   !--continue the alpha loop
+   enddo
+   do nal=1, nalpha
+      do jj=1,jjmax                                                    
+         if (jj.lt.nbeta) k=nbeta-jj+1                                 
+         if (jj.ge.nbeta) k=jj-nbeta+1                                 
+         if (jj.le.nbeta) ssm(k,nal,itemp)=sn(nal,jj)
+         if (jj.ge.nbeta) ssp(k,nal,itemp)=sn(nal,jj)
+     enddo
       enddo
 
+   do nal=1,nalpha   
       !--record the results
       if (iprt.eq.1) write(nsyso,&
         '(/4x,'' beta'',7x,''s(alpha,beta)'',7x,&
@@ -2134,6 +2312,7 @@ contains
    deallocate(bex)
    deallocate(exb)
    deallocate(betan)
+   deallocate(sn)
    return
    end subroutine coldh
 
