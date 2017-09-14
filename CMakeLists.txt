@@ -2,7 +2,7 @@
 cmake_minimum_required( VERSION 3.2 ) 
 set( CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "Supported configuration types" FORCE )
         
-project( njoy LANGUAGES Fortran )
+project( njoy LANGUAGES Fortran CXX)
 get_directory_property( is_subproject PARENT_DIRECTORY )
 include( CMakeDependentOption REQUIRED )
 
@@ -40,6 +40,13 @@ CMAKE_DEPENDENT_OPTION( static_njoy "Statically link the njoy component library"
 if ( profile_generate AND profile_use )
     message( FATAL_ERROR "Cannot both generate and use execution profile in the same configuration" )
 endif()
+
+if(NOT DEFINED ENV{NCRYSTALDIR})
+    message(FATAL_ERROR " NCRYSTALDIR environment variable must be defined")
+else()
+    message(STATUS "NCRYSTALDIR:" $ENV{NCRYSTALDIR})
+endif()
+
 
 if ( profile_generate )
     file( MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/profiling" )
@@ -150,6 +157,7 @@ add_library( njoy ${njoy_library_linkage}
              "${CMAKE_CURRENT_SOURCE_DIR}/src/groupr.f90"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/heatr.f90"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/leapr.f90"
+             "${CMAKE_CURRENT_SOURCE_DIR}/src/ncrystal_generate_bragg_edges.cpp"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/locale.f90"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/main.f90"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/mainio.f90"
@@ -171,7 +179,7 @@ add_library( njoy ${njoy_library_linkage}
              "${CMAKE_CURRENT_SOURCE_DIR}/src/viewr.f90"
              "${CMAKE_CURRENT_SOURCE_DIR}/src/wimsr.f90" )
 
-target_include_directories( njoy PUBLIC "${CMAKE_Fortran_MODULE_DIRECTORY}" )
+target_include_directories( njoy PUBLIC "${CMAKE_Fortran_MODULE_DIRECTORY}" "$ENV{NCRYSTALDIR}/include")
 
 set( PREFIX njoy_${CMAKE_Fortran_COMPILER_ID}_${CMAKE_SYSTEM_NAME} )
 
@@ -192,7 +200,7 @@ $<$<BOOL:${link_time_optimization}>:${${PREFIX}_link_time_optimization_flags}>
 $<$<BOOL:${nonportable_optimization}>:${${PREFIX}_nonportable_optimization_flags}>>
 ${Fortran_appended_flags} ${njoy_appended_flags} )
 
-target_link_libraries( njoy PUBLIC "$<$<AND:$<CONFIG:RELEASE>,$<BOOL:${link_time_optimization}>>:${${PREFIX}_RELEASE_flags};${${PREFIX}_link_time_optimization_flags}$<$<BOOL:${profile_generate}>:${${PREFIX}_profile_generate_flags};>$<$<BOOL:${profile_use}>:${${PREFIX}_profile_use_flags};>$<$<BOOL:${nonportable_optimization}>:${${PREFIX}_nonportable_optimization_flags};>>$<$<CONFIG:DEBUG>:$<$<BOOL:${coverage}>:${${PREFIX}_coverage_flags};>>$<$<BOOL:Fortran_appended_flags>:${Fortran_appended_flags};>$<$<BOOL:njoy_appended_flags>:${njoy_appended_flags};>" )
+target_link_libraries( njoy PUBLIC "$<$<AND:$<CONFIG:RELEASE>,$<BOOL:${link_time_optimization}>>:${${PREFIX}_RELEASE_flags};${${PREFIX}_link_time_optimization_flags}$<$<BOOL:${profile_generate}>:${${PREFIX}_profile_generate_flags};>$<$<BOOL:${profile_use}>:${${PREFIX}_profile_use_flags};>$<$<BOOL:${nonportable_optimization}>:${${PREFIX}_nonportable_optimization_flags};>>$<$<CONFIG:DEBUG>:$<$<BOOL:${coverage}>:${${PREFIX}_coverage_flags};>>$<$<BOOL:Fortran_appended_flags>:${Fortran_appended_flags};>$<$<BOOL:njoy_appended_flags>:${njoy_appended_flags};>" "$ENV{NCRYSTALDIR}/lib/libNCrystal.so" )
 
 if ( NOT is_subproject )
     add_executable( njoy_executable src/main.f90 )

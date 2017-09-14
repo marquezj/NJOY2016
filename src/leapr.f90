@@ -209,7 +209,12 @@ contains
    !    card 19 - coherent scattering fraction (nsk.ne.0)
    !       cfrac   coherent fraction
    !
-   ! card 20 - file 1 comments, repeat until blank line is read.
+   !    card 20  NCrystal commands for iel.eq.99 only
+   !       ncrystal_command  string with NCrystal commands
+   !                         see https://github.com/mctools/ncrystal/wiki/Using-NCrystal
+   !                         for reference
+   !
+   ! card 21 - file 1 comments, repeat until blank line is read.
    !
    !--------------------------------------------------------------------
    use mainio  ! provides nysi,nsyso,nsyse
@@ -225,6 +230,7 @@ contains
    real(kr),dimension(:),allocatable::bragg
    real(kr),dimension(:),allocatable::scr
    real(kr),parameter::zero=0
+   character::ncrystal_command*256
 
    !--initialize
    call timer(time)
@@ -397,13 +403,21 @@ contains
       endif
    enddo
 
+   if (iel .eq. 99 ) then
+      read(nsysi,*) ncrystal_command
+   endif
+   
    !--construct bragg edges if coherent was requested.
    nedge=0
    if (iel.gt.0) then
       maxb=60000
       allocate(bragg(maxb))
       emax=5
+      if (iel .ne. 99) then
       call coher(iel,npr,bragg,nedge,maxb,emax)
+   else
+        call ncrystal_wrapper(ncrystal_command, bragg, nedge, maxb)
+      endif
    else
       maxb=1
       allocate(bragg(maxb))
@@ -2443,6 +2457,43 @@ contains
    return
    end subroutine copys
 
+   subroutine ncrystal_wrapper(ncrystal_command, bragg, nedge, maxb)
+   !--------------------------------------------------------------------
+   ! Compute Bragg energies and associated structure factors
+   ! for coherent elastic scattering by calling NCrystal
+   !--------------------------------------------------------------------
+
+   use, intrinsic :: iso_c_binding
+  
+   interface
+     subroutine generate_bragg_edges( c_s, c_nbragg, c_bragg ) bind ( c )
+       use iso_c_binding
+       integer ( c_int ) :: c_nbragg
+       real ( c_double ) :: c_bragg(*)
+       character(len=1, kind=c_char), dimension(*), intent(in) :: c_s
+     end subroutine generate_bragg_edges
+   end interface
+
+   integer ( c_int ) :: c_nbragg = 0
+   real ( c_double ) c_bragg(maxb)
+
+   character :: ncrystal_command*256
+   real(kr)  :: bragg(maxb)
+   integer   :: nedge
+   integer   :: maxb
+
+   integer :: i
+
+   call generate_bragg_edges( trim(ncrystal_command) // C_NULL_CHAR, c_nbragg, c_bragg )
+   
+   nedge = c_nbragg
+   maxb = 2*c_nbragg
+   do i=1, maxb
+     bragg(i) = c_bragg(i)
+   enddo
+
+   end subroutine ncrystal_wrapper
+   
    subroutine coher(lat,natom,b,nbe,maxb,emax)
    !--------------------------------------------------------------------
    ! Compute Bragg energies and associated structure factors
