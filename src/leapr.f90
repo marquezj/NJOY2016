@@ -391,7 +391,7 @@ contains
          if (ncold.gt.0) call coldh(itemp,temp)
 
          !--check for skold option for correlations
-         if ((nsk.eq.2).and.(ncold.eq.0)) call skold(cfrac,itemp,temp,ssm,nalpha,nbeta,ntempr)
+         if ((nsk.eq.2).and.(ncold.eq.0)) call skold(itemp,temp,ssm,nalpha,nbeta,ntempr)
 
       !--continue temperature loop
       enddo
@@ -2947,7 +2947,7 @@ contains
 
    end subroutine coher
 
-   subroutine skold(cfrac,itemp,temp,ssm,nalpha,nbeta,ntempr)
+   subroutine skold(itemp,temp,ssm,nalpha,nbeta,ntempr)
    !--------------------------------------------------------------------
    ! use skold approximation to add in the effects
    ! of intermolecular coherence.
@@ -2957,7 +2957,7 @@ contains
    use endf    ! provides terp1
    ! externals
    integer::itemp,nalpha,nbeta,ntempr
-   real(kr)::cfrac,temp
+   real(kr)::temp
    real(kr)::ssm(nbeta,nalpha,ntempr)
    ! internals
    integer::i,j,k,kk,nal,ibeta,iprt,jprt
