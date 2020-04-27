@@ -1792,6 +1792,9 @@ contains
 
    !--use free-gas s(alpha,beta).
   200 continue
+   ! the beta grid is fixed to 45 beta values (previously only the first 9)
+   ! following an issue with Fe56 and H1 from ENDF/B-VIII.0 - a better solution
+   ! would be to contruct the grid adaptatively based on emax and tempr
    nalpha=1
    nbeta=30
    allocate(alpha(nalpha))
@@ -2213,6 +2216,7 @@ contains
    enow=egrid(ie)
    if (ie.gt.1.and.temp.gt.break) enow=enow*temp/break
    enow=sigfig(enow,8,0)
+   esi(ie)=enow
    j=0
    sum=0
 
@@ -2281,7 +2285,7 @@ contains
       write(nsyso,'(/''            mu            theta      dsigma/dmu'')')
       do i=1,nmu
          write(nsyso,'(i5,1x,f15.8,1x,f12.4,1x,1p,e14.7)') i,uj(i),&
-               acos(uj(i))*180.0/3.14159265359,sj(i)/2.0
+           acos(uj(i))*180.0/pi,sj(i)/2.0
       enddo
    endif
 

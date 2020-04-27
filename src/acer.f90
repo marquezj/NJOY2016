@@ -144,10 +144,18 @@ contains
    !    matd     material to be processed
    !    tempd    temperature desired (kelvin) (default=300)
    ! card 6
-   !    newfor   use new cummulative angle distributions,
+   !    newfor   use new cumulative angle distributions,
    !               law 61, and outgoing particle distributions.
    !               (0=no, 1=yes, default=1)
    !    iopp     detailed photons (0=no, 1=yes, default=1)
+   !    ismooth  switch on/off smoothing operation (1/0, default=1=on)
+   !               set ismooth to 1 to cause extension of mf6 cm
+   !               distributions to lower energies using a sqrt(E)
+   !               shape, to extend delayed neutron distributions as
+   !               sqrt(E) to lower energies, and to add additional
+   !               points above 10 Mev to some fission spectra assuming
+   !               an exponential shape.  otherwise, use ismooth=0.
+   !               NOTE:  ismooth=0 is the default value in njoy99.
    ! card 7
    !  type of thinning is determined by sign of thin(1)
    !  (pos. or zero/neg.=energy skip/integral fraction)
@@ -166,10 +174,10 @@ contains
    !    matd     material to be processed
    !    tempd    temperature desired (kelvin) (default=300)
    !    tname    thermal zaid name ( 6 char max, def=za)
+   !    nza      number of moderator component za values (default=3, max=16)
    ! card 8a
-   !    iza01    moderator component za value
-   !    iza02    moderator component za value (def=0)
-   !    iza03    moderator component za value (def=0)
+   !    iza      moderator component za values (up to a maximum of 16 values,
+   !             must be terminated by /)
    ! card 9
    !    mti      mt for thermal incoherent data
    !    nbint    number of bins for incoherent scattering
@@ -226,18 +234,17 @@ contains
 
    ! internals
    integer::nendf,npend,ngend,nace,ndir
-   integer::iopt,iprint,itype,nxtra
+   integer::iopt,iprint,itype,nxtra,nza
    integer::matd
    real(kr)::tempd
-   integer::newfor,iopp
+   integer::newfor,iopp,ismooth
    real(kr)::thin(4)
    integer::iskf,iwtt,npts
    real(kr)::suff
-   character(70)::hk
+   character(70)::hk=' '
    integer::izn(16)
    real(kr)::awn(16)
    character(6)::tname,tscr
-   integer::iza01,iza02,iza03
    integer::mti,nbint,mte,ielas,nmix,iwt
    real(kr)::emax
    real(kr)::time,zaid
@@ -303,13 +310,26 @@ contains
         matd,tempd
       iopp=1
       newfor=1
-      read(nsysi,*) newfor,iopp
+      ismooth=1
+      read(nsysi,*) newfor,iopp,ismooth
       write(nsyso,'(&
         &'' new formats .......................... '',i10/&
-        &'' photon option ........................ '',i10)')&
-        newfor,iopp
+        &'' photon option ........................ '',i10/&
+        &'' smoothing option ..................... '',i10)')&
+        newfor,iopp,ismooth
+      if (newfor.ne.0.and.newfor.ne.1) then
+         call error('acer','illegal newfor.',' ')
+      endif
+      if (iopp.ne.0.and.iopp.ne.1) then
+         call error('acer','illegal iopp.',' ')
+      endif
+      if (ismooth.ne.0.and.ismooth.ne.1) then
+         call error('acer','illegal ismooth.',' ')
+      endif
       if (iopp.eq.0) write(nsyso,&
         '(/'' photons will not be processed'')')
+      if (ismooth.eq.0) write(nsyso,&
+        '(/'' smoothing operation will not be performed'')')
       mte=0
       z(1)=0
       z(2)=0
@@ -339,24 +359,41 @@ contains
    else if (iopt.eq.2) then
       tempd=300
       tscr=' '
-      read(nsysi,*) matd,tempd,tscr
+      nza=3
+      read(nsysi,*) matd,tempd,tscr,nza
       nch=0
       do i=1,6
          if (tscr(i:i).ne.' ') nch=i
       enddo
       tname='      '
       if (nch.gt.0) tname(7-nch:6)=tscr(1:nch)
-      iza02=0
-      iza03=0
-      read(nsysi,*) iza01,iza02,iza03
       write(nsyso,'(&
         &'' mat to be processed .................. '',i10/&
         &'' temperature .......................... '',1p,e10.3/&
-        &'' thermal name ......................... '',4x,a6/&
-        &'' iza01 ................................ '',i10/&
-        &'' iza02 ................................ '',i10/&
-        &'' iza03 ................................ '',i10)')&
-        matd,tempd,tname,iza01,iza02,iza03
+        &'' thermal name ......................... '',4x,a6)')&
+        matd,tempd,tname
+      if (nza.lt.1.or.nza.gt.16) then
+         call error('acer','between 1 and 16 za value must be given.',' ')
+      endif
+      do i=1,nza
+         izn(i)=0
+      enddo
+      read(nsysi,*) (izn(i),i=1,nza)
+      do i=nza,1,-1
+         if (izn(i).ne.zero) then
+            nza=i
+            exit
+         endif
+      enddo
+      write(nsyso,'(&
+        &'' number moderator component za values . '',i10/&
+        &'' iza   ................................ '',i10/&
+        &(40x,i10))') nza,(izn(i),i=1,nza)
+      do i=1,nza
+         if (izn(i).le.zero) then
+            call error('acer','found invalid za numbers in izn.',' ')
+         endif
+      enddo
       mti=0
       nbint=0
       mte=0
@@ -400,12 +437,11 @@ contains
    !--prepare fast ace data
    if (iopt.eq.1) then
       call acetop(nendf,npend,ngend,nace,ndir,iprint,itype,mcnpx,suff,&
-        hk,izn,awn,matd,tempd,newfor,iopp,thin)
+        hk,izn,awn,matd,tempd,newfor,iopp,ismooth,thin)
 
    !--prepare thermal ace data
    else if (iopt.eq.2) then
       call acesix(npend,nace,ndir,matd,tempd,tname,suff,hk,izn,awn,&
-        iza01,iza02,iza03,&
         mti,nbint,mte,ielas,nmix,emax,iwt,iprint,mcnpx)
 
    !--prepare dosimetry data
@@ -483,4 +519,3 @@ contains
    end subroutine acer
 
 end module acem
-

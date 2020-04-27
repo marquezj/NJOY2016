@@ -592,6 +592,11 @@ contains
          call ilist(enow,eunr,nunr)
       endif
    enddo
+   if (enow.lt.eh) then
+      write(strng,&
+        '(''between'',1p,e12.4,'' and'',1p,e12.4,'' eV'')') enow, eh
+      call error('rdunf2','energy dependent data undefined',strng) 
+   endif
    ! loop over l states
    do l=1,nls
       call contio(nendf,0,0,scr,nb,nw)
@@ -669,12 +674,17 @@ contains
             enddo
             inow=inow+6
             ! add to list of energy nodes
+            enow=sigfig(scr(jnow+1),7,0)
             if (n.ne.1.and.n.ne.ne.and.l.eq.1.and.j.eq.1) then
-               enow=sigfig(scr(jnow+1),7,0)
                call ilist(enow,eunr,nunr)
             endif
             jnow=jnow+6
          enddo
+         if (enow.lt.eh) then
+            write(strng,&
+              '(''between'',1p,e12.4,'' and'',1p,e12.4,'' eV'')') enow, eh
+            call error('rdunf2','energy dependent data undefined',strng) 
+         endif
       enddo
    enddo
    if (inow.gt.jx) call error('rdunf2','storage exceeded.',' ')
@@ -889,8 +899,11 @@ contains
    real(kr),parameter::rc1=.123e0_kr
    real(kr),parameter::rc2=.08e0_kr
    real(kr),parameter::third=.333333333e0_kr
+   real(kr),parameter::zero=0
    real(kr),parameter::one=1.e0_kr
    real(kr),parameter::small=1.e-8_kr
+   logical::noissue=.true.
+   character(60)::strng1,strng2
 
    cwaven=sqrt(2*amassn*amu*ev)*1.e-12_kr/hbar
 
@@ -931,6 +944,10 @@ contains
    sigbt=sigbkg(1)+spot+sint
    do is=1,nsig0
       sigm(is)=sigbt+sig0(is)
+      if (sigm(is).lt.zero) then
+         call mess('unresl', 'Negative background xs in urr may cause issues',&
+                         &'Check the evaluation')
+      endif
    enddo
    ispot=1
 
@@ -1093,6 +1110,11 @@ contains
                   sti=gg(5)/del(itp)
                   do is0=1,nsig0
                      beta=sigm(is0)/s0u
+                     if (beta.lt.zero.and.abs(beta).lt.one.and.noissue) then
+                        call mess('unresl','Square root of negative number detected',&
+                             &'Probably caused by negative background xs in urr')
+                        noissue=.false.
+                     endif
                      call ajku(beta,sti,xj,xk)
                      if (mu.gt.0) xj=xj*qw(kf,mu)
                      if (mu.gt.0) xk=xk*qw(kf,mu)

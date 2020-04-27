@@ -53,7 +53,6 @@ module acefc
    ! File 6 parameters
    integer::ipnu,jpnu,nkk
    real(kr),allocatable,dimension(:)::e1456,p1456nu
-   real(kr),allocatable,dimension(:)::p16456nu,p6456nu
    integer::nsix,n16
 
    ! particle production information (from common/ace8/)
@@ -86,19 +85,10 @@ module acefc
    integer,parameter::nxss=20000000
    real(kr)::xss(nxss)
 
-   ! set ismooth to 1 to cause extension of mf6 cm distributions
-   ! to lower energies using a sqrt(E) shape, to extend delayed
-   ! neutron distributions as sqrt(E) to lower energies, and to
-   ! add additional points above 10 Mev to some fission spectra
-   ! assuming an exponential shape.  otherwise, use ismooth=0.
-   ! NOTE:  ismooth=0 is the default value in njoy99.
-   integer,parameter::ismooth=1
-!   integer,parameter::ismooth=0
-
 contains
 
    subroutine acetop(nendf,npend,ngend,nace,ndir,iprint,itype,mcnpx,&
-     suff,hk,izn,awn,matd,tempd,newfor,iopp,thin)
+     suff,hk,izn,awn,matd,tempd,newfor,iopp,ismooth,thin)
    !--------------------------------------------------------------------
    ! Prepare an ACE fast continuous file.
    !--------------------------------------------------------------------
@@ -106,7 +96,7 @@ contains
    use util   ! provides openz,mess,closz
    use endf   ! provides endf routines and variables
    ! externals
-   integer::nendf,npend,ngend,nace,ndir,iprint,itype,matd,newfor,iopp
+   integer::nendf,npend,ngend,nace,ndir,iprint,itype,matd,newfor,iopp,ismooth,i
    integer::mcnpx
    real(kr)::suff
    character(70)::hk
@@ -121,6 +111,40 @@ contains
    nxsd=0
    jxsd=0
    xss=0
+
+   esz=0
+   nu=0
+   mtr=0
+   lqr=0
+   tyr=0
+   lsig=0
+   sig=0
+   land=0
+   and=0
+   ldlw=0
+   dlw=0
+   gpd=0
+   mtrp=0
+   lsigp=0
+   sigp=0
+   landp=0
+   andp=0
+   ldlwp=0
+   dlwp=0
+   yp=0
+   fis=0
+   end=0
+   iurpt=0
+   nud=0
+   dndat=0
+   ldnd=0
+   dnd=0
+   do i=1,2
+      jxsd(i)=0
+   enddo
+   ptype=0
+   ntro=0
+   ploct=0
 
    !--assign input units
    call openz(nendf,0)
@@ -184,7 +208,7 @@ contains
    call atend(mscr,0)
 
    !--load ace data into memory.
-   call acelod(mscr,nedis,suff,matd,tempd,newfor,mcnpx)
+   call acelod(mscr,suff,matd,tempd,newfor,mcnpx,ismooth)
 
    !--print ace file.
    if (iprint.gt.0) call aceprt(hk)
@@ -331,6 +355,7 @@ contains
    mfs(nxc)=1
    mts(nxc)=451
    ! save number of card images for descriptive data only for mt=451
+   ncds=0
    if (npend.gt.0) ncds=nwd+2
    if (npend.lt.0) ncds=nwd/17+2
    ncs(nxc)=ncds
@@ -791,10 +816,9 @@ contains
    integer,parameter::maxscr=2000
    real(kr),parameter::xmax=2.e7_kr
    real(kr),parameter::errlim=1.e-5_kr
-   real(kr),parameter::stpmax=1.25e0_kr
-   integer,parameter::nc=4
 
    !--initialize
+   if (allocated(scr)) deallocate(scr)
    allocate(scr(maxscr))
    nxc=nxc+1
    mfs(nxc)=1
@@ -1025,7 +1049,7 @@ contains
    real(kr)::thin(4)
    ! internals
    integer::nws,nwscr,ithopt,iwtt,npts,iskp,j,mtcomp
-   integer::nb,nw,icomp,iinel,iedis,jethr,lt,lr
+   integer::nb,nw,iinel,iedis,jethr,lt,lr
    integer::i,jt,ne,isave,iter,idone,nsave,ilast,inext
    integer::limit,ii,k,nc,nen,ll,nee,iee,mtn,itest
    integer::kbase,np,ifrst,it,ibase,idis,nold,nxcs
@@ -1056,6 +1080,8 @@ contains
    !--initialize
    inew=iabs(inew)
    nscr=iabs(nscr)
+   e1=zero
+   e2=zero
    if (nin.lt.0) nscr=-nscr
    call openz(-inew,1)
    call openz(-iold,1)
@@ -1119,12 +1145,11 @@ contains
          call contio(nin,0,0,scr,nb,nw)
       enddo
       if (mfh.ne.0) then
+         !--new competition flag (can only be -1, 51, 91 or 4)
+         iinel=l1h
+         !--continue but check for file with old competition flag
          call listio(nin,0,0,scr,nb,nw)
-         icomp=l2h
-         iinel=0
-         if (icomp.ne.0) then
-            iinel=mod(icomp,1000)
-         endif
+         if (iinel.eq.zero.and.l2h.gt.zero) iinel=mod(l2h,1000)
          if (iinel.eq.4) mtcomp=4
       endif
    endif
@@ -1912,7 +1937,6 @@ contains
    character(60)::string
    real(kr)::dzap,test,zap,e1,e2,f,ei,ep,epn,ss,ff,dmu
    real(kr)::b(50)
-   real(kr)::y,enext
    real(kr),dimension(:),allocatable::tab1
    real(kr),dimension(:),allocatable::scr
    integer,parameter::nwmaxn=65000
@@ -1937,6 +1961,8 @@ contains
    nsc=1
    npt=mcoars+1
    nwmax=nwmaxn
+   intep=0
+   ne1=0
    call ptinit
    allocate(scr(nwmax))
    write(nsyso,'(/)')
@@ -2617,6 +2643,7 @@ contains
 
    !--work with list record read in topfil
    nord=n1h
+   fl=0
    do j=1,nord
       fl(j)=scr(6+j)
    enddo
@@ -2827,6 +2854,9 @@ contains
    real(kr)::x(imax),y(imax)
    real(kr),parameter::err=0.01e0_kr
 
+   ! initialise
+   jn=0
+
    !--work with tab1 or list record read in topfil
    if (mfh.eq.6) then
       nr=1
@@ -2938,6 +2968,12 @@ contains
    ! set area of back angles to be omitted from distribution
    real(kr),parameter::aback=1.e-4_kr
    real(kr),parameter::zero=0
+
+   ! initialise
+   intmu=0
+   nmu=0
+   nw=0
+   slpe=0
 
    !--work on tab1 record read (or constructed) by topfil
    t=a(1)
@@ -3309,6 +3345,9 @@ contains
    real(kr)::p(65)
    real(kr),parameter::zero=0
 
+   ! initialise
+   acos=0
+
    !--start the conversion process
    ndebug=nsyso
    ndebug=0
@@ -3555,6 +3594,8 @@ contains
    call tpidio(nf12c,0,0,scr,nb,nw)
    i16=0
    ntape=0
+   nsave=0
+   nk=0
    l=1
    if (mf1x(1).eq.0.and.iopp.ne.0) write(nsyso,&
      '(/'' message from gamsum---file 12 not found.'')')
@@ -3588,7 +3629,11 @@ contains
    else
       call gety1(e,enxt,jdis,x,nf12c,scr)
    endif
+   jscr2=0
    idone=0
+   jw=0
+   k=0
+   kk=0
    do while (idone.eq.0)
       call gety2(e,thresh,idis,y,nin,scr(jscr))
       if (iopp.ne.0) then
@@ -3820,7 +3865,6 @@ contains
    real(kr),dimension(:),allocatable::scr
    character(4)::blank='    '
    real(kr),parameter::etop=1.e10_kr
-   real(kr),parameter::emax=2.e7_kr
    real(kr),parameter::zero=0
 
    !--set up size and storage, and assign i/o units
@@ -4477,7 +4521,6 @@ contains
    real(kr),dimension(:),allocatable::egn,egg
    real(kr),dimension(:),allocatable::ee,eb
    real(kr),dimension(:),allocatable::sig
-   integer,parameter::maxsig=10000
    real(kr),parameter::elo=1.e-5_kr
    real(kr),parameter::ehi=2.e7_kr
    real(kr),parameter::zero=0
@@ -4495,6 +4538,10 @@ contains
    allocate(scr(nwamax))
    nsmax=5000
    allocate(sig(nsmax))
+
+   ! initialise
+   ngg=0
+   nggp1=0
 
    !--write the isotropic mf14/mt1 for the multigroup photons
    if (nin.ne.0) then
@@ -4794,7 +4841,7 @@ contains
    return
    end subroutine gamout
 
-   subroutine acelod(nin,nedis,suff,matd,tempd,newfor,mcnpx)
+   subroutine acelod(nin,suff,matd,tempd,newfor,mcnpx,ismooth)
    !-------------------------------------------------------------------
    ! Load data in ace format from the input file.
    !-------------------------------------------------------------------
@@ -4803,16 +4850,16 @@ contains
    use util ! repoz,dater,error,skiprz,sigfig
    use endf ! provides endf routines and variables
    ! externals
-   integer::nin,nedis,matd,newfor,mcnpx
+   integer::nin,matd,newfor,mcnpx,ismooth
    real(kr)::suff,tempd
    ! internals
    integer::nwscr,nnu,nnup,kfis,mtnr,mtntr,i,nnud,nnf
    integer::nurd,idone,mta,nb,nw,lnu,n,m,jnt,j
-   integer::lssf,icomp,iinel,iabso,nunr,ncyc,i1,idis
+   integer::lssf,iinel,iabso,nunr,ncyc,i1,idis
    integer::k,it,ic,ie,ih,next,keep3,keep4,keep,ir,iskip
    integer::nnex,keep1,keep2,l,ij,lct,lvt,ltt,ltt3,lttn
    integer::jscr,iso,ne,law,lidp,last,il,ja,jb,nure,nurb
-   integer::mtxx,mtaa,jj,ll,ib,iza,mf,mt,lend,lendp,inow
+   integer::jj,ll,ib,iza,mf,mt,lend,lendp,inow
    integer::lff,lxx,nn,mm,iint,loc,ix
    integer::mt418,mt518
    real(kr)::urlo,urhi,e,enext,s,test,awp,spi,q,x,teste,zaid
@@ -4829,6 +4876,8 @@ contains
    real(kr),parameter::zero=0
 
    !--initialize
+   inow=0
+   nnex=0
    nwscr=10000
    allocate(scr(nwscr))
    do i=1,8
@@ -5179,14 +5228,15 @@ contains
       if (mth.eq.153) then
          write(nsyso,'(/'' found mt=153 with unresolved-range'',&
            &'' probability tables'')')
+         iinel=l1h !--new competition flag (can only be -1, 51, 91 or 4)
+         iabso=l2h !--new competition flag (can be -1, 0 or positive)
          call listio(nin,0,0,scr,nb,nw)
          lssf=l1h
-         icomp=l2h
-         iinel=0
-         iabso=0
-         if (icomp.ne.0) then
-            iinel=mod(icomp,1000)
-            iabso=icomp/1000
+         if (iinel.eq.zero) then !--old competition flags are used
+            iinel=-1
+            iabso=-1
+            if (mod(l2h,1000).ne.zero) iinel=mod(l2h,1000)
+            if (l2h/1000.ne.zero) iabso=l2h/1000
          endif
          nunr=n2h
          ncyc=n1h/nunr
@@ -5211,7 +5261,7 @@ contains
            write(nsyso,'(''   tables are cross sections'')')
          if (lssf.eq.1)&
            write(nsyso,'(''   tables are factors'')')
-         if (icomp.eq.0) then
+         if (iinel.lt.0.and.iabso.lt.0) then
             write(nsyso,'(''   no competition'')')
          else
             write(nsyso,'(''   inelastic competition ='',i3/&
@@ -5271,6 +5321,7 @@ contains
    ir=0
 
    !--read and store cross sections producing incident particle
+   iskip=-1
    mt=-1
    do while (mt.lt.mtnr)
       call contio(nin,0,0,scr,nb,nw)
@@ -5764,7 +5815,7 @@ contains
 
                !--store neutron angular distributions
                if (izai.eq.1) then
-                  call acensd(ir,next,scr,nin,awp,ltt3,lttn,&
+                  call acensd(ir,next,scr,nin,ltt3,lttn,&
                     ltt,last,law,ne,ie,il,iso,newfor)
 
                !--treat charged-particle elastic
@@ -5802,9 +5853,11 @@ contains
             endif
          enddo
          if (mf.eq.5) then
-            call acelf5(next,i,matd,mt,q,nin)
+            call acelf5(next,i,matd,mt,q,nin,ismooth)
          else if (mf.eq.6) then
-            if (mt518.eq.0) call acelf6(next,i,matd,mt,q,iza,izai,nin,newfor)
+            if (mt518.eq.0) then
+               call acelf6(next,i,matd,mt,q,iza,izai,nin,newfor,ismooth)
+            endif
          else
             if ((next+11).gt.nxss) call error('acelod',&
               'insufficient space for energy distributions',' ')
@@ -5841,15 +5894,10 @@ contains
       xss(next)=nure
       nurb=nint(urd(5))
       nurb=(nurb/nure-1)/6
-      mtxx=nint(urd(4))
-      mtxx=-1
-      if (iinel.ne.0) mtxx=iinel
-      mtaa=-1
-      if (iabso.ne.0) mtxx=iabso
       xss(next+1)=nurb
       xss(next+2)=2
-      xss(next+3)=mtxx
-      xss(next+4)=mtaa
+      xss(next+3)=iinel
+      xss(next+4)=iabso
       xss(next+5)=lssf
       next=next+6
       do ie=1,nure
@@ -6189,7 +6237,7 @@ contains
    return
    end subroutine acelod
 
-   subroutine acensd(ir,next,scr,nin,awp,ltt3,lttn,ltt,last,law,&
+   subroutine acensd(ir,next,scr,nin,ltt3,lttn,ltt,last,law,&
       ne,ie,il,iso,newfor)
    !-------------------------------------------------------------------
    ! Process this neutron scattering distribution.
@@ -6201,7 +6249,6 @@ contains
    ! externals
    integer::ir,next,nin,ltt3,lttn,ltt,last,law,ne,ie,il,iso,newfor
    real(kr)::scr(*)
-   real(kr)::awp
    ! internals
    integer::idone,j,nb,nw,lang,iint,nn,kk,nmu,m,n,i,ne1,ii,ll
    real(kr)::sum,renorm
@@ -6210,6 +6257,7 @@ contains
 
    idone=0
    ne1=0
+   nmu=0
    do while (idone.eq.0)
       do j=1,ne
          if (newfor.eq.0) then
@@ -6438,7 +6486,7 @@ contains
                if (lidp.eq.0) sigc=(eta**2/wn**2)/(1-amuu)**2
                if (lidp.eq.1) sigc=((2*eta**2/wn**2)&
                  /(1-amuu**2))*((1+amuu**2)/(1-amuu**2)&
-                 +(-1**i2s)*cos(eta*log((1+amuu)/(1-amuu)))&
+                 +((-1)**i2s)*cos(eta*log((1+amuu)/(1-amuu)))&
                  /(2*spi+1))
                if (ltp.lt.12) pmu=pmu-sigc
                if (iterp.eq.1) then
@@ -6522,7 +6570,7 @@ contains
    return
    end subroutine acecpe
 
-   subroutine acelf5(next,i,matd,mt,q,nin)
+   subroutine acelf5(next,i,matd,mt,q,nin,ismooth)
    !-------------------------------------------------------------------
    ! Process this reaction from File 5.
    !-------------------------------------------------------------------
@@ -6530,7 +6578,7 @@ contains
    use util ! provides sigfig
    use endf ! provides endf routines and variables
    ! externals
-   integer::next,i,matd,mt,nin
+   integer::next,i,matd,mt,nin,ismooth
    real(kr)::q
    ! internals
    integer::nb,nw,nk,k,lf,m,n,jnt,ja,jb,j,l,nextn,nexd,ne,jscr,ki
@@ -6929,7 +6977,7 @@ contains
    return
    end subroutine acelf5
 
-   subroutine acelf6(next,i,matd,mt,q,iza,izai,nin,newfor)
+   subroutine acelf6(next,i,matd,mt,q,iza,izai,nin,newfor,ismooth)
    !-------------------------------------------------------------------
    ! Prepare generalized yields and energy-angle distributions for
    ! this reaction from File 6.
@@ -6939,7 +6987,7 @@ contains
    use endf ! provides endf routines and variables
    use acecm ! provides bachaa,ptleg2,pttab2
    ! externals
-   integer::next,i,matd,mt,iza,izai,nin,newfor
+   integer::next,i,matd,mt,iza,izai,nin,newfor,ismooth
    real(kr)::q
    ! internals
    integer::nb,nw,lct,nk,jscr,ivar,ik,idone,ikk,law,m,n,jnt
@@ -6948,12 +6996,11 @@ contains
    integer::ki,iso,ik3,ii1,ia,ll,intmu,nmu,imu,mus,npep,intep
    integer::last,nx,ix
    integer::jp,jpn,jpp
-   integer::nxyz1,nxyz2,nxyz3,nxyz4
    real(kr)::test,eemx,yield,xnext,xx,yy,y,xn,eyl,gyl,en
    real(kr)::apsx,step1,step2,xl,pl,yn,pn,rn,sum,ee
    real(kr)::ep,e,bzro,sfe,sfo,bbi,fbarcm,delfcm,akal,rkal
    real(kr)::emu1,emu2,fbl,ffl,fbcm,ffcm,akak,del,av,renorm
-   real(kr)::zap,aa,test1,test2,test3,ex,fx,cx,cxx,val,dx
+   real(kr)::zap,aa,test1,test2,test3,ex,fx,cx,cxx,val
    real(kr)::e1,p1,e2,p2
    integer::loc(5)
    character(60)::strng
@@ -6961,8 +7008,6 @@ contains
    integer,parameter::nwscr=18000
    real(kr),parameter::emev=1.e6_kr
    real(kr),parameter::small=1.e-30_kr
-   real(kr),parameter::eps=.001e0_kr
-   real(kr),parameter::tmin=1.e-6_kr
    real(kr),parameter::etop=1.e10_kr
    real(kr),parameter::up=1.00001e0_kr
    real(kr),parameter::elow=1.e-5_kr
@@ -6987,6 +7032,11 @@ contains
    ik=0
    idone=0
    ikk=0
+   m=0
+   igyl=0
+   yield=0
+   last=0
+   nexd=0
    do while (idone.eq.0)
       ikk=ikk+1
       call tab1io(nin,0,0,scr(jscr),nb,nw)
@@ -7043,6 +7093,10 @@ contains
       endif
       if (ikk.eq.nk) idone=1
    enddo
+   if (ik.eq.0) then
+      write(strng,'(''outgoing'',i6,'' mt '',i3)') izai,mt
+      call error('acelf6','could not find required mf6 subsection',strng)
+   endif
    if (ik.gt.1) write(nsyso,&
      '(/'' multiple mf6 subsections found for mt='',i3)') mth
    if (ivar.eq.1) write(nsyso,&
@@ -7237,18 +7291,18 @@ contains
       pl=0
       yn=0
       n=1
-      xss(next+n)=xl
-      xss(next+nn+n)=pl
-      xss(next+2*nn+n)=yn
-      xx=elow
-      do while (xx.lt.test1)
+      xss(next+n)=xl       ! values between zero and one, Eout/E^i_max
+      xss(next+nn+n)=pl    ! probability
+      xss(next+2*nn+n)=yn  ! cumulative probability
+      xx=elow              ! 1e-5
+      do while (xx.lt.test1)  ! as long as xx is smaller than 0.99999
          n=n+1
          if (xx.gt.test3) then
             xx=1
             pn=0
          else
             rn=3
-            pn=sqrt(xx)*(1-xx)**(rn*npsx/2-4)
+            pn=sqrt(xx)*(1-xx)**(rn*npsx/2-4) ! ENDF formula 6.21, with Eprime normalised to E^i_max
          endif
          yn=yn+(xx-xl)*(pn+pl)/2
          xss(next+n)=sigfig(xx,7,0)
@@ -7357,8 +7411,8 @@ contains
                   n=n-1
                enddo
                write(nsyso,'('' extending histograms as sqrt(E) below'',&
-                 &1p,e10.2,'' MeV for E='',e10.2,'' MeV'')')&
-                 scr(7+ncyc)/emev,ee
+                 &1p,e10.2,'' MeV for E='',e10.2,'' MeV mt='',i3)')&
+                 scr(7+ncyc)/emev,ee,mt
                do while (scr(7+ncyc).gt.ex)
                   do ix=nx,1,-1
                      scr(6+ncyc+ix)=scr(6+ix)
@@ -7386,8 +7440,8 @@ contains
                ! insert those zero energy data
                if (scr(7).gt.ex) then
                   write(nsyso,'('' extending lin-lin as sqrt(E) '',&
-                   &''below'',1p,e10.2,'' eV for E='',e10.2,'' eV'')&
-                   &')scr(7)/emev,ee
+                   &''below'',1p,e10.2,'' MeV for E='',e10.2,'' MeV mt='',i3)&
+                   &')scr(7)/emev,ee,mt
                   do ix=nx,1,-1
                      scr(6+ncyc+ix)=scr(6+ix)
                   enddo
@@ -7495,7 +7549,11 @@ contains
                !--distribution given in kalbach format
                if (lang.eq.2) then
                   xss(ki+3*n+nexd)=scr(9+ncyc*(ki-1))
-                  aa=bachaa(1,1,iza,ee,ep)
+                  if (na.eq.2) then
+                     aa=scr(10+ncyc*(ki-1))
+                  else
+                     aa=bachaa(1,1,iza,ee,ep)
+                  endif
                   xss(ki+4*n+nexd)=sigfig(aa,7,0)
 
                !--convert legendre distribution to kalbach form
@@ -7783,7 +7841,7 @@ contains
    real(kr)::dy,dm,xm,yt,test,check,f,diff,ym,dco
    integer,parameter::imax=20
    real(kr)::x(imax),y(imax)
-   integer,parameter::maxang=2000
+   integer,parameter::maxang=4000
    real(kr)::aco(maxang),cprob(maxang)
    real(kr),parameter::tol1=.001e0_kr
    real(kr),parameter::tol2=.01e0_kr
@@ -7792,6 +7850,9 @@ contains
    real(kr),parameter::hund=.01e0_kr
    real(kr),parameter::umin=.96e0_kr
    real(kr),parameter::zero=0
+
+   ! initialise
+   test=0
 
    !--adaptive reconstruction of angular distribution
    ii=0
@@ -7927,7 +7988,7 @@ contains
    if (lidp.eq.0) sigc=(eta**2/wn**2)/(1-x)**2
    if (lidp.eq.1) sigc=((2*eta**2/wn**2)&
      /(1-x**2))*((1+x**2)/(1-x**2)&
-     +(-1**i2s)*cos(eta*log((1+x)/(1-x)))/(2*spi+1))
+     +((-1)**i2s)*cos(eta*log((1+x)/(1-x)))/(2*spi+1))
    nt=nint(c(6))
    np=2*nt
    call legndr(x,p,np)
@@ -7998,7 +8059,7 @@ contains
    integer::next,matd,ngmt,nin
    ! internals
    integer::nesp,nex,j,nwords,kgmt,mfd,mtd,mtdnc,nb,nw
-   integer::nk,mto,ik,ifini,jscr,idone,lf,lp,m,n,nn,nnn,jnt,i
+   integer::nk,mto,ik,ifini,jscr,idone,lf,lp,m,n,nn,jnt,i
    integer::ie,je,jn,jfirst,jlast,nlast,law,lff,li,ni,ii,mmm
    integer::ne,lc,imu,nexl,nc,ic,nexd,k,lep,nd,na,ncyc,ki
    integer::nyp,mtl,loct,nd0,mtdold
@@ -8028,6 +8089,7 @@ contains
    allocate(scr(nwscr))
    allocate(dise(ndise))
    dise=zero
+   nexd=0
 
    !--loop over photon production reactions
    kgmt=0
@@ -8957,6 +9019,20 @@ contains
    !--allocate scratch storage
    allocate(scr(nwscr))
 
+   ! initialise
+   aprime=0
+   chkl=0
+   suml=0
+   iaa=0
+   k=0
+   lld=0
+   lle=0
+   ne=0
+   pp1l=0
+   pp2l=0
+   q=0
+   ubar=0
+
    iza=nint(za)
    emc2=amassn*amu*clight*clight/ev/emev
 
@@ -8997,6 +9073,8 @@ contains
    endif
 
    !--count up productions
+   ip=0
+   thresh=0
    ntro=ptype+ntype
    ploct=ntro+ntype
    do i=1,ntype
@@ -9038,7 +9116,7 @@ contains
       do while (xss(esz+it-1).lt.thresh*(1-delt))
          it=it+1
       enddo
-      hpd=next
+      hpd=next                            ! ixs values are being set
       xss(ploct+10*(itype-1))=hpd
       xss(hpd)=it
       xss(hpd+1)=nes-it+1
@@ -9051,7 +9129,7 @@ contains
       sigh=lsigh+ntrh
       xss(ploct+10*(itype-1)+4)=sigh
       next=sigh
-      do ie=it,nes
+      do ie=it,nes                        ! initialise xs and heating to 0.0
          xss(hpd+2+ie-it)=0
          xss(hpd+2+(nes-it+1)+ie-it)=0
       enddo
@@ -9796,7 +9874,7 @@ contains
                         renorm=1/xss(next+1+3*nx)
                         do ix=1,nx
                            xss(next+1+nx+ix)=&
-                             sigfig(renorm*xss(next+1+2*nx+ix),7,0)
+                             sigfig(renorm*xss(next+1+nx+ix),7,0)
                            xss(next+1+2*nx+ix)=&
                              sigfig(renorm*xss(next+1+2*nx+ix),9,0)
                         enddo
@@ -9868,7 +9946,7 @@ contains
                xss(next+5)=1
                next=next+2+2*2
                xss(last+2)=next-dlwh+1
-               xss(next)=0
+               xss(next)=0     ! q is zero for mt102
                xss(next+1)=awi/(awr+awi)
                next=next+2
                ! add in contribution to heating
@@ -10118,7 +10196,11 @@ contains
                                  rkal=scr(lld+8+ncyc*(ig-1))
                                  xss(next+1+ig+3*ng)=sigfig(rkal,7,0)
                                  ep=xss(next+1+ig)
-                                 akal=bachaa(izai,izap,iza,ee,ep)
+                                 if (na.eq.2) then
+                                    akal=scr(lld+9+ncyc*(ig-1))
+                                 else
+                                    akal=bachaa(izai,izap,iza,ee,ep)
+                                 endif
                                  xss(next+1+ig+4*ng)=sigfig(akal,7,0)
                               ! legendre or tabulated distribution
                               else if (lawnow.eq.61) then
@@ -10289,6 +10371,8 @@ contains
                      idone=1
 
                   !--law 6, phase space
+                  ! most likely duplicate code (already found in acelf6), except
+                  ! for the heating part
                   else if (law.eq.6) then
                      xss(last+1)=66
                      call contio(nin,0,0,scr(ll),nb,nw)
@@ -10621,7 +10705,7 @@ contains
    call findf(matd,6,0,nin)
    do while (mfh.eq.6)
       call contio(nin,0,0,scr,nb,nw)
-      if (mfh.eq.6) then
+      if (mfh.eq.6.and.mth.gt.2) then
          mt=mth
          mtt=0
          ir=0
@@ -10648,7 +10732,7 @@ contains
             enddo
 
             !--compute the heating from this recoil nuclide
-            if (izap.gt.2004.and.mt.gt.2) then
+            if (izap.gt.2004) then
 
                !--law 1
                if (law.eq.1) then
@@ -10787,8 +10871,8 @@ contains
                call skip6a(nin,0,0,scr,law)
             endif
          enddo
-         call tosend(nin,0,0,scr)
       endif
+      call tosend(nin,0,0,scr)
 
    !--continue loop over mts
    enddo
@@ -11976,6 +12060,7 @@ contains
    enddo
 
    !--print energy-dependent photon production yields
+   kl=0
    if (nindx.ne.0) then
       if (ipy.gt.0) write(nsyso,'(''1''/&
         &'' photon production yields''/&
@@ -12767,6 +12852,101 @@ contains
    return
    end subroutine aceout
 
+   subroutine advance_to_locator(nout,l,locator)
+   !-------------------------------------------------------------------
+   ! Advance to the next locator position from the current position l.
+   ! If the current position is not equal to the locator position, the
+   ! function will advance l until it is equal to the locator position.
+   ! It will write the values in the xss array while advancing to the
+   ! new position.
+   !-------------------------------------------------------------------
+   use util
+   ! externals
+   integer::nout,l,locator
+   ! internals
+   character(66)::text
+
+   if (l.lt.locator) then
+      write(text,'(''expected xss index ('',i6,'') greater than '',&
+                   &''current index ('',i6,'')'')') locator, l
+      call mess('change',text,'xss array was padded accordingly')
+      do while (l.lt.locator)
+         call typen(l,nout,1)
+         l=l+1
+      enddo
+   else if (l.gt.locator) then
+      write(text,'(''expected xss index ('',i6,'') less than '',&
+                   &''current index ('',i6,'')'')') locator, l
+      call error('change',text,'this may be a serious problem')
+   endif
+
+   return
+   end subroutine advance_to_locator
+
+   subroutine write_integer(nout,l)
+   !-------------------------------------------------------------------
+   ! Write an integer value at the position l, and advance l to the
+   ! next position
+   !-------------------------------------------------------------------
+   ! externals
+   integer::nout,l
+
+   call typen(l,nout,1)
+   l=l+1
+
+   return
+   end subroutine write_integer
+
+   subroutine write_real(nout,l)
+   !-------------------------------------------------------------------
+   ! Write a real value at the position l, and advance l to the
+   ! next position
+   !-------------------------------------------------------------------
+   ! externals
+   integer::nout,l
+
+   call typen(l,nout,2)
+   l=l+1
+
+   return
+   end subroutine write_real
+
+   subroutine write_integer_list(nout,l,n)
+   !-------------------------------------------------------------------
+   ! Write n integer values from position l, and advance l to the
+   ! next position
+   !-------------------------------------------------------------------
+   ! externals
+   integer::nout,l,n
+   ! internals
+   integer::i
+
+   do i=1,n
+      call typen(l,nout,1)
+      l=l+1
+   enddo
+
+   return
+   end subroutine write_integer_list
+
+   subroutine write_real_list(nout,l,n)
+   !-------------------------------------------------------------------
+   ! Write n real values from position l, and advance l to the
+   ! next position
+   !-------------------------------------------------------------------
+   ! externals
+   integer::nout,l,n
+   ! internals
+   integer::i
+
+   do i=1,n
+      call typen(l,nout,2)
+      l=l+1
+   enddo
+
+   return
+   end subroutine write_real_list
+
    subroutine change(nout)
    !-------------------------------------------------------------------
    ! Change ACE data fields from integer to real or vice versa.
@@ -12777,61 +12957,52 @@ contains
    ! If nout.eq.1, integer fields are changed to real in memory
    !    (fields are assumed to contain mixed reals and integers).
    !-------------------------------------------------------------------
+   use util ! provides error
    ! externals
    integer::nout
    ! internals
-   integer::n,i,l,lnu,m,nc,j,nrr,ne,nn,ll,k,np,nw
-   integer::ly,lnw,law,net,nmu,kk,nep,nure,nurb,mftype
-   integer::nyp,ntro,jj,ir,nyh,li,ii,ntrh
+   integer::n,i,l,lnu,m,nc,j,nrr,ne,nn,k,np
+   integer::ly,lnw,law,net,nmu,nep,nure,nurb,mftype
+   integer::nyp,ir,nyh,ii,ntrh
+   integer::hpd, mtrh, tyrh, lsigh, sigh, landh, andh, ldlwh, dlwh, yh ! IXS
+   integer::rlocator  ! locator index for reaction data
+   integer::ielocator ! locator index for incident energy data
+   integer::oelocator ! locator index for outgoing energy data
+   integer::plocator  ! locator index for the particle IXS array
+   character(66)::text
 
-   !--write or convert esz block
-   n=5*nes
-   do i=1,n
-      call typen(i,nout,2)
-   enddo
+   ! initialise starting position
+   l=1
 
-   !--nu block
+   !--write esz block
+   call write_real_list(nout,l,5*nes)
+
+   !--write nu block
    if (nu.ne.0) then
-      l=nu
+      call advance_to_locator(nout,l,nu)
       lnu=nint(xss(l))
-      if (lnu.gt.0) then
+      if (lnu.gt.0) then  ! either prompt or total nu
         m=1
-      else
+      else                ! both prompt and total nu
         m=2
-        call typen(l,nout,1)
-        l=l+1
+        call write_integer(nout,l)  ! locator for the total nu array
       endif
       do i=1,m
          lnu=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
+         call write_integer(nout,l)                   ! LNU
          if (lnu.ne.2) then
             nc=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            do j=1,nc
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)                ! NC
+            call write_real_list(nout,l,nc)           ! C (NC values)
          else
             nrr=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)                ! NR
             if (nrr.ne.0) then
-               n=2*nrr
-               do j=1,n
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
+               call write_integer_list(nout,l,2*nrr)  ! NBT, INT (each NR values)
             endif
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=2*ne
-            do j=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)                ! NE
+            call write_real_list(nout,l,2*ne)         ! E, NU (each NE values)
          endif
       enddo
    endif
@@ -12840,644 +13011,393 @@ contains
    if (ntr.ne.0) then
 
       !--mtr block
-      l=mtr
-      do i=1,ntr
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,mtr)
+      call write_integer_list(nout,l,ntr)
 
       !--lqr block
-      l=lqr
-      do i=1,ntr
-         call typen(l,nout,2)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,lqr)
+      call write_real_list(nout,l,ntr)
 
       !--tyr block
-      l=tyr
-      do i=1,ntr
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,tyr)
+      call write_integer_list(nout,l,ntr)
 
       !--lsig block
-      l=lsig
-      do i=1,ntr
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,lsig)
+      rlocator=l
+      call write_integer_list(nout,l,ntr)
 
       !--sig block
-      l=sig
+      call advance_to_locator(nout,l,sig)
       do i=1,ntr
-         call typen(l,nout,1)
-         l=l+1
+         call advance_to_locator(nout,l,sig+nint(xss(rlocator))-1) ! sig=jxs(7)
+         call write_integer(nout,l)
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-         do j=1,ne
-            call typen(l,nout,2)
-            l=l+1
-         enddo
+         call write_integer(nout,l)
+         call write_real_list(nout,l,ne)
+         rlocator=rlocator+1
       enddo
    endif
 
    !--land block
+   call advance_to_locator(nout,l,land)
    n=nr+1
-   l=land
-   li=l-1
-   do i=1,n
-      call typen(l,nout,1)
-      l=l+1
-   enddo
+   rlocator=l
+   call write_integer_list(nout,l,n)
 
    !--and block
-   l=and
-   do i=1,n
-      nn=nint(xss(li+i))
+   call advance_to_locator(nout,l,and)
+   do i=1,n                                         ! loop over every reaction
+      nn=nint(xss(rlocator))                        ! relative locator position
       if (nn.gt.0) then
+         call advance_to_locator(nout,l,and+nn-1)
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
+         call write_integer(nout,l)                 ! NE
+         call write_real_list(nout,l,ne)            ! E (NE values)
+         ielocator=l
+         call write_integer_list(nout,l,ne)         ! L (NE values)
          do j=1,ne
-            call typen(l,nout,2)
-            l=l+1
-         enddo
-         ll=l-1
-         do j=1,ne
-            call typen(l,nout,1)
-            l=l+1
-         enddo
-         do j=1,ne
-            nn=nint(xss(ll+j))
+            nn=nint(xss(ielocator))                 ! relative locator position
             if (nn.ne.0) then
-               if (nn.ge.0) then
-                  do k=1,33
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
-               else
-                  np=nint(xss(iabs(nn)+and))
-                  call typen(l,nout,1)
-                  l=l+1
-                  call typen(l,nout,1)
-                  l=l+1
-                  nw=3*np
-                  do k=1,nw
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+               call advance_to_locator(nout,l,and+iabs(nn)-1)
+               if (nn.ge.0) then                    ! 32 equiprobable bins
+                  call write_real_list(nout,l,33)
+               else                                 ! tabulated angular
+                  call write_integer(nout,l)        ! JJ - interpolation flag
+                  np=nint(xss(l))
+                  call write_integer(nout,l)        ! NP
+                  call write_real_list(nout,l,3*np) ! CS, PDF, CDF (each NP values)
                endif
             endif
+            ielocator=ielocator+1
          enddo
       endif
+      rlocator=rlocator+1
    enddo
 
    !--distributions
-    if (nr.ne.0) then
+   if (nr.ne.0) then
 
       !--ldlw block
-      l=ldlw
-      do i=1,nr
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,ldlw)
+      rlocator=l
+      call write_integer_list(nout,l,nr)          ! L (NR values)
 
       !--dlw block
-      l=dlw
+      call advance_to_locator(nout,l,dlw)
       do i=1,nr
          ly=nint(xss(tyr+i-1))
          ly=iabs(ly)
-         if (ly.gt.100) then
-            l=ly-100+dlw-1
+         if (ly.gt.100) then                      ! energy dependent yield
+            call advance_to_locator(nout,l,dlw+ly-101) ! dlw=jed=jxs(11)
             nrr=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)               ! NR
             if (nrr.gt.0) then
-               n=2*nrr
-               do j=1,n
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
+               call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
             endif
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=2*ne
-            do j=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)               ! NE
+            call write_real_list(nout,l,2*ne)        ! E and Y (each NE values)
          endif
 
          !--loop over laws
+         call advance_to_locator(nout,l,dlw+nint(xss(rlocator))-1) ! dlw=jxs(11)
          lnw=1
          do while (lnw.gt.0)
             lnw=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)            ! LNW
             law=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)            ! LAW
+            call write_integer(nout,l)            ! IDAT
             nrr=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)               ! NR
             if (nrr.gt.0) then
-               n=2*nrr
-               do j=1,n
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
+               call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
             endif
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=2*ne
-            do j=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)            ! NE
+            call write_real_list(nout,l,2*ne)     ! E and P (each NE values)
 
             !--law 1
             if (law.eq.1) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
                net=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               do j=1,ne
-                  do k=1,net
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
-               enddo
+               call write_integer(nout,l)            ! NET
+               call write_real_list(nout,l,ne*net)   ! Eout table (NE*NET values)
 
             !--law 3
             else if (law.eq.3) then
-               call typen(l,nout,2)
-               l=l+1
-               call typen(l,nout,2)
-               l=l+1
+               call write_real(nout,l)               ! ((A+1)/A)*abs(Q)
+               call write_real(nout,l)               ! (A/(A+1))**2
 
             !--law 4
             else if (law.eq.4) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
+               ielocator=l
+               call write_integer_list(nout,l,ne)    ! L (NE values)
                do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlw+nint(xss(ielocator))-1) ! dlw=jed=jxs(11)
+                  call write_integer(nout,l)         ! INTT
                   np=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  n=3*np
-                  do k=1,n
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call write_integer(nout,l)         ! NP
+                  call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+                  ielocator=ielocator+1
                enddo
 
             !--law 5
             else if (law.eq.5) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               n=2*ne
-               do j=1,n
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,2*ne)     ! E, theta (each NE values)
                net=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               do j=1,net
-                     call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NET
+               call write_real_list(nout,l,net)      ! X (NET values)
 
             !--law 7 or law 9
             else if (law.eq.7.or.law.eq.9) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               n=2*ne
-               do j=1,n
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               call typen(l,nout,2)
-               l=l+1
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,2*ne)     ! E, theta (each NE values)
+               call write_real(nout,l)               ! U
 
             !--law 11
             else if (law.eq.11) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               n=2*ne
-               do j=1,n
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NEa
+               call write_real_list(nout,l,2*ne)     ! E, a (each NEa values)
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               n=2*ne
-               do j=1,n
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               call typen(l,nout,2)
-               l=l+1
+               call write_integer(nout,l)            ! NEb
+               call write_real_list(nout,l,2*ne)     ! E, b (each NEb values)
+               call write_real(nout,l)               ! U
 
             !--law 44
             else if (law.eq.44) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
+               ielocator=l
+               call write_integer_list(nout,l,ne)    ! L (NE values)
                do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlw+nint(xss(ielocator))-1) ! dlw=jed=jxs(11)
+                  call write_integer(nout,l)         ! INTT
                   np=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  n=5*np
-                  do k=1,n
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call write_integer(nout,l)         ! NP
+                  call write_real_list(nout,l,5*np)  ! Eout, PDF, CDF, R, A (each NP values)
+                  ielocator=ielocator+1
                enddo
 
             !--law 61
             else if (law.eq.61) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               if (nrr.ne.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+               call write_integer(nout,l)               ! NR
+               if (nrr.gt.0) then
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-                  do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
+               ielocator=l
+               call write_integer_list(nout,l,ne)    ! L (NE values)
                do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlw+nint(xss(ielocator))-1) ! dlw=jed=jxs(11)
+                  call write_integer(nout,l)         ! INTT
                   np=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  n=3*np
-                  do k=1,n
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call write_integer(nout,l)         ! NP
+                  call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+                  oelocator=l
+                  call write_integer_list(nout,l,np) ! L (NP values)
                   do k=1,np
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
-                  do k=1,np
-                     call typen(l,nout,1)
-                     l=l+1
+                     call advance_to_locator(nout,l,dlw+nint(xss(oelocator))-1) ! dlw=jed=jxs(11)
+                     call write_integer(nout,l)         ! JJ
                      nmu=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     nw=3*nmu
-                     do kk=1,nw
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
+                     call write_integer(nout,l)         ! NMU
+                     call write_real_list(nout,l,3*nmu) ! Mu, PDF, CDF (each NMU values)
+                     oelocator=oelocator+1
                   enddo
+                  ielocator=ielocator+1
                enddo
 
             !--law 66
             else if (law.eq.66) then
-               call typen(l,nout,1)
-               l=l+1
-               call typen(l,nout,2)
-               l=l+1
-               call typen(l,nout,1)
-               l=l+1
-               nn=nint(xss(l))
-               n=3*nn
-               call typen(l,nout,1)
-               l=l+1
-               do k=1,n
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NPSX
+               call write_real(nout,l)               ! AP
+               call write_integer(nout,l)            ! INTT
+               np=nint(xss(l))
+               call write_integer(nout,l)            ! NP
+               call write_real_list(nout,l,3*np)     ! xi, PDF, CDF (each NP values)
 
             !--law 67
             else if (law.eq.67) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)             ! NE
+               call write_real_list(nout,l,ne)        ! E (NE values)
+               ielocator=l
+               call write_integer_list(nout,l,ne)     ! L (NE values)
                do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlw+nint(xss(ielocator))-1) ! dlw=jed=jxs(11)
+                  call write_integer(nout,l)          ! INTMU
                   nmu=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
+                  call write_integer(nout,l)          ! NMU
+                  call write_real_list(nout,l,nmu)    ! MU (NMU values)
+                  oelocator=l
+                  call write_integer_list(nout,l,nmu) ! L (NMU values)
                   do k=1,nmu
-                     call typen(l,nout,2)
-                     l=l+1
-                     enddo
-                  do k=1,nmu
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
-                  do k=1,nmu
-                     call typen(l,nout,1)
-                     l=l+1
+                     call advance_to_locator(nout,l,dlw+nint(xss(oelocator))-1) ! dlw=jed=jxs(11)
+                     call write_integer(nout,l)       ! INTEP
                      nep=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     nn=3*nep
-                     do n=1,nn
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
+                     call write_integer(nout,l)       ! NPEP
+                     call write_real_list(nout,l,3*nep) ! Eout, PDF, CDF (each NMU values)
+                     oelocator=oelocator+1
                   enddo
+                  ielocator=ielocator+1
                enddo
+            else
+               write(text,'(''Undefined law for dlw block: '',i3)') law
+               call error('change',text,' ')
             endif
          enddo
+         rlocator=rlocator+1
       enddo
    endif
 
    !--unresolved-range probability-table block
    if (iurpt.gt.0) then
-      l=iurpt
+      call advance_to_locator(nout,l,iurpt)
       nure=nint(xss(l))
-      call typen(l,nout,1)
-      l=l+1
+      call write_integer(nout,l)            ! N
       nurb=nint(xss(l))
-      call typen(l,nout,1)
-      l=l+1
-      call typen(l,nout,1)
-      l=l+1
-      call typen(l,nout,1)
-      l=l+1
-      call typen(l,nout,1)
-      l=l+1
-      call typen(l,nout,1)
-      l=l+1
-      n=nure*(1+6*nurb)
-      do i=1,n
-         call typen(l,nout,2)
-         l=l+1
-      enddo
+      call write_integer(nout,l)            ! M
+      call write_integer(nout,l)            ! INT
+      call write_integer(nout,l)            ! ILF
+      call write_integer(nout,l)            ! IOA
+      call write_integer(nout,l)            ! IFF
+      call write_real_list(nout,l,nure*(1+6*nurb)) ! Ein, ptable for every Ein
    endif
 
-   !--delayed neutron block
+   !--delayed neutron blocks
    if (ndnf.ne.0) then
-      !--delayed nubar
-      l=nud
+
+      !--DNU - delayed nubar
+      call advance_to_locator(nout,l,nud)
       lnu=nint(xss(l))
-      call typen(l,nout,1)
-      l=l+1
+      call write_integer(nout,l)                ! LNU (only 2 is allowed)
       nrr=nint(xss(l))
-      call typen(l,nout,1)
-      l=l+1
+      call write_integer(nout,l)                ! NR
       if (nrr.ne.0) then
-         n=2*nrr
-         do j=1,n
-            call typen(l,nout,1)
-            l=l+1
-         enddo
+         call write_integer_list(nout,l,2*nrr)  ! NBT, INT (each NR values)
       endif
       ne=nint(xss(l))
-      call typen(l,nout,1)
-      l=l+1
-      n=2*ne
-      do j=1,n
-         call typen(l,nout,2)
-         l=l+1
-      enddo
-      !--precursor data
-      l=dndat
+      call write_integer(nout,l)                ! NE
+      call write_real_list(nout,l,2*ne)         ! E, NU (each NE values)
+
+      !--BDD - precursor data
+      call advance_to_locator(nout,l,dndat)
       do i=1,ndnf
-         call typen(l,nout,2)
-         l=l+1
-      nrr=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-      if (nrr.ne.0) then
-         n=2*nrr
-            do j=1,n
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+         call write_real(nout,l)                ! DEC
+         nrr=nint(xss(l))
+         call write_integer(nout,l)                ! NR
+         if (nrr.ne.0) then
+            call write_integer_list(nout,l,2*nrr)  ! NBT, INT (each NR values)
          endif
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-         n=2*ne
-         do j=1,n
-            call typen(l,nout,2)
-            l=l+1
-         enddo
+         call write_integer(nout,l)                ! NE
+         call write_real_list(nout,l,2*ne)         ! E, P (each NE values)
       enddo
-      !--precursor energy distribution locators
+
+      !--DNEDL - precursor energy distribution locators
+      call advance_to_locator(nout,l,ldnd)
+      rlocator=l
+      call write_integer_list(nout,l,ndnf)         ! L (NR values)
+
+      !--DNED - precursor energy distributions
+      call advance_to_locator(nout,l,dnd)
       do i=1,ndnf
-         call typen(l,nout,1)
-         l=l+1
-      enddo
-      !--precursor energy distributions
-      do i=1,ndnf
-         call typen(l,nout,1)
-         l=l+1
-         call typen(l,nout,1)
-         l=l+1
-         call typen(l,nout,1)
-         l=l+1
-      nrr=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-      if (nrr.ne.0) then
-         n=2*nrr
-            do j=1,n
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+         call advance_to_locator(nout,l,dnd+nint(xss(rlocator))-1) ! dnd=jxs(27)
+         call write_integer(nout,l)            ! LNW
+         call write_integer(nout,l)            ! LAW
+         call write_integer(nout,l)            ! IDAT
+         nrr=nint(xss(l))
+         call write_integer(nout,l)               ! NR
+         if (nrr.gt.0) then
+            call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
          endif
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-         n=2*ne
-         do j=1,n
-            call typen(l,nout,2)
-            l=l+1
-         enddo
+         call write_integer(nout,l)            ! NE
+         call write_real_list(nout,l,2*ne)     ! E and P (each NE values)
+
          !--law=4 data
-      nrr=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-      if (nrr.ne.0) then
-         n=2*nrr
-            do j=1,n
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+         nrr=nint(xss(l))
+         call write_integer(nout,l)               ! NR
+         if (nrr.gt.0) then
+            call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
          endif
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
+         call write_integer(nout,l)            ! NE
+         call write_real_list(nout,l,ne)       ! E (NE values)
+         ielocator=l
+         call write_integer_list(nout,l,ne)    ! L (NE values)
          do j=1,ne
-            call typen(l,nout,2)
-            l=l+1
-         enddo
-         do j=1,ne
-            call typen(l,nout,1)
-            l=l+1
-         enddo
-         do j=1,ne
-            call typen(l,nout,1)
-            l=l+1
+            call advance_to_locator(nout,l,dnd+nint(xss(ielocator))-1) ! dnd=jed=jxs(27)
+            call write_integer(nout,l)         ! INTT
             np=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=3*np
-            do k=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)         ! NP
+            call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+            ielocator=ielocator+1
          enddo
+         rlocator=rlocator+1
       enddo
    endif
 
    !--gpd block
    if (gpd.ne.0) then
-      l=gpd
-      do i=1,nes
-         call typen(l,nout,2)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,gpd)
+      call write_real_list(nout,l,nes)
       if (mtrp.gt.gpd+nes) then
-         n=20*30
-         do i=1,n
-            call typen(l,nout,2)
-            l=l+1
-         enddo
+         call write_real_list(nout,l,20*30)
       endif
    endif
 
@@ -13485,548 +13405,412 @@ contains
    if (ntrp.ne.0) then
 
       !--mtrp block
-      l=mtrp
-      do i=1,ntrp
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,mtrp)
+      call write_integer_list(nout,l,ntrp)
 
       !--lsigp block
-      l=lsigp
-      do i=1,ntrp
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,lsigp)
+      rlocator=l
+      call write_integer_list(nout,l,ntrp)
 
       !--sigp block
-      l=sigp
+      call advance_to_locator(nout,l,sigp)
       do i=1,ntrp
+         call advance_to_locator(nout,l,sigp+nint(xss(rlocator))-1) ! sigp=jxs(15)
+
          mftype=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
-         if (mftype.ne.12.and.mftype.ne.16) then
-            call typen(l,nout,1)
-            l=l+1
+         call write_integer(nout,l)              ! MFTYPE
+         if (mftype.ne.12.and.mftype.ne.16) then ! MF=13
+            call write_integer(nout,l)           ! IE
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            do j=1,ne
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)           ! NE
+            call write_real_list(nout,l,ne)      ! sigma (NE values)
          else
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)           ! MTMULT
             nrr=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)           ! NR
             if (nrr.gt.0) then
-               n=2*nrr
-               do j=1,n
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
+               call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
             endif
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=2*ne
-            do j=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)           ! NE
+            call write_real_list(nout,l,2*ne)    ! E, Y (each NE values)
          endif
+         rlocator=rlocator+1
       enddo
 
       !--landp block
-      l=landp
-      li=l-1
-      do i=1,ntrp
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,landp)
+      rlocator=l
+      call write_integer_list(nout,l,ntrp)
 
       !--andp block
-      l=andp
+      call advance_to_locator(nout,l,andp)
       do i=1,ntrp
-         nn=nint(xss(li+i))
+         nn=nint(xss(rlocator))                     ! relative locator position
          if (nn.gt.0) then
+            call advance_to_locator(nout,l,andp+nn-1)
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)              ! NE
+            call write_real_list(nout,l,ne)         ! E (NE values)
+            ielocator=l
+            call write_integer_list(nout,l,ne)      ! L (NE values)
             do j=1,ne
-               call typen(l,nout,2)
-               l=l+1
-            enddo
-            ll=l-1
-            do j=1,ne
-               call typen(l,nout,1)
-               l=l+1
-            enddo
-            do j=1,ne
-               nn=nint(xss(ll+j))
+               nn=nint(xss(ielocator))              ! relative locator position
                if (nn.gt.0) then
-                  do k=1,33
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call advance_to_locator(nout,l,andp+nn-1)
+                  call write_real_list(nout,l,33)   ! 32 equiprobable bins
                endif
+               ielocator=ielocator+1
             enddo
          endif
+         rlocator=rlocator+1
       enddo
 
       !--ldlwp block
-      l=ldlwp
-      do i=1,ntrp
-         call typen(l,nout,1)
-         l=l+1
-      enddo
+      call advance_to_locator(nout,l,ldlwp)
+      rlocator=l
+      call write_integer_list(nout,l,ntrp)
 
       !--dlwp block
-      l=dlwp
+      call advance_to_locator(nout,l,dlwp)
       do i=1,ntrp
+
+         !--loop over laws
+         call advance_to_locator(nout,l,dlwp+nint(xss(rlocator))-1) ! dlwp=jxs(19)
          lnw=1
          do while (lnw.ne.0)
             lnw=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)            ! LNW
             law=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)            ! LAW
+            call write_integer(nout,l)            ! IDAT
             nrr=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
+            call write_integer(nout,l)               ! NR
             if (nrr.gt.0) then
-               n=2*nrr
-               do j=1,n
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
+               call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
             endif
             ne=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            n=2*ne
-            do j=1,n
-               call typen(l,nout,2)
-               l=l+1
-            enddo
+            call write_integer(nout,l)            ! NE
+            call write_real_list(nout,l,2*ne)     ! E and P (each NE values)
 
             !--law 1
             if (law.eq.1) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
                net=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               do j=1,ne
-                  do k=1,net
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
-               enddo
+               call write_integer(nout,l)            ! NET
+               call write_real_list(nout,l,ne*net)   ! Eout table (NE*NET values)
 
             !--law 2
             else if (law.eq.2) then
-               call typen(l,nout,1)
-               l=l+1
-               call typen(l,nout,2)
-               l=l+1
+               call write_integer(nout,l)            ! LP
+               call write_real(nout,l)               ! EG
 
             !--law 4 and law 44
+            ! this piece is NOT compatible with LAW=44 (need two additional
+            ! arrays for r and a), potential issue?
             else if (law.eq.4.or.law.eq.44) then
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)               ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do j=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)            ! NE
+               call write_real_list(nout,l,ne)       ! E (NE values)
+               ielocator=l
+               call write_integer_list(nout,l,ne)    ! L (NE values)
                do j=1,ne
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
-               enddo
-               do j=1,ne
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlwp+nint(xss(ielocator))-1) ! dlwp=jed=jxs(19)
+                  call write_integer(nout,l)         ! INTT
                   np=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  n=3*np
-                  do k=1,n
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call write_integer(nout,l)         ! NP
+                  call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+                  ielocator=ielocator+1
                enddo
+            else
+               write(text,'(''Undefined law for dlwp block: '',i3)') law
+               call error('change',text,' ')
             endif
          enddo
+         rlocator=rlocator+1
       enddo
 
       !--yp block
-        l=yp
-        nyp=nint(xss(l))
-        call typen(l,nout,1)
-        l=l+1
-        do i=1,nyp
-           call typen(l,nout,1)
-           l=l+1
-        enddo
-     endif
+      call advance_to_locator(nout,l,yp)
+      nyp=nint(xss(l))
+      call write_integer(nout,l)            ! NYP
+      call write_integer_list(nout,l,nyp)   ! MTY (NYP values)
+   endif
 
    !--particle production blocks
-     if (ntype.gt.0) then
+   if (ntype.gt.0) then
 
-      !--ptype, ntro, and ixs arrays
-        do i=1,ntype
-           call typen(l,nout,1)
-           l=l+1
-        enddo
-        ntro=l
-        do i=1,ntype
-           call typen(l,nout,1)
-           l=l+1
-        enddo
-        nw=10*ntype
-        do i=1,nw
-           call typen(l,nout,1)
-           l=l+1
-        enddo
+      !--PTYPE
+      call advance_to_locator(nout,l,ptype)
+      call write_integer_list(nout,l,ntype)    ! IP (ntype values)
+
+      !--NTRO
+      call advance_to_locator(nout,l,ntro)
+      call write_integer_list(nout,l,ntype)    ! NP (ntype values)
+
+      !--IXS
+      call advance_to_locator(nout,l,ploct)
+      plocator=l
+      call write_integer_list(nout,l,10*ntype) ! IXS array (10 values) for each IP
 
       !--loop over particle types
       do i=1,ntype
 
+         ! IXS array entries
+         hpd=nint(xss(plocator))
+         mtrh=nint(xss(plocator+1))
+         tyrh=nint(xss(plocator+2))
+         lsigh=nint(xss(plocator+3))
+         sigh=nint(xss(plocator+4))
+         landh=nint(xss(plocator+5))
+         andh=nint(xss(plocator+6))
+         ldlwh=nint(xss(plocator+7))
+         dlwh=nint(xss(plocator+8))
+         yh=nint(xss(plocator+9))
+
          !--hpd block
-         call typen(l,nout,1)
-         l=l+1
+         call advance_to_locator(nout,l,hpd)
+         call write_integer(nout,l)              ! IE
          ne=nint(xss(l))
-         call typen(l,nout,1)
-         l=l+1
+         call write_integer(nout,l)              ! NE
          if (ne.ne.0) then
-            nw=2*ne
-            do j=1,nw
-               call typen(l,nout,2)
-               l=l+1
-            enddo
-            ntrh=nint(xss(ntro-1+i))
+            call write_real_list(nout,l,2*ne)    ! sigma, H (each NE values)
+
+            ntrh=nint(xss(ntro+i-1)) ! number of reactions for this particle type
 
             !--mtrh block
-            do k=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call advance_to_locator(nout,l,mtrh)
+            call write_integer_list(nout,l,ntrh) ! MT (ntrh values)
 
             !--tyrh block
-            do k=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call advance_to_locator(nout,l,tyrh)
+            call write_integer_list(nout,l,ntrh) ! TYR (ntrh values)
 
             !--lsigh block
-            do k=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call advance_to_locator(nout,l,lsigh)
+            rlocator=l
+            call write_integer_list(nout,l,ntrh) ! L (ntrh values)
 
-            !--sigh block
+            !--sigh block - format equal to sigp block, only MFMULT=12 allowed
+            call advance_to_locator(nout,l,sigh)
             do j=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-               call typen(l,nout,1)
-               l=l+1
+               call advance_to_locator(nout,l,sigh+nint(xss(rlocator))-1)
+
+               call write_integer(nout,l)           ! MFTYPE=12 only
+               call write_integer(nout,l)           ! MTMULT
                nrr=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
+               call write_integer(nout,l)           ! NR
                if (nrr.gt.0) then
-                  n=2*nrr
-                  do jj=1,n
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
+                  call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                endif
                ne=nint(xss(l))
-               call typen(l,nout,1)
-               l=l+1
-               nw=2*ne
-               do k=1,nw
-                  call typen(l,nout,2)
-                  l=l+1
-               enddo
+               call write_integer(nout,l)           ! NE
+               call write_real_list(nout,l,2*ne)    ! E, Y (each NE values)
+               rlocator=rlocator+1
             enddo
 
             !--landh block
-            li=l-1
-            do k=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call advance_to_locator(nout,l,landh)
+            rlocator=l
+            call write_integer_list(nout,l,ntrh) ! L (ntrh values)
 
-            !--andh block
+            !--andh block - format equal to and block
+            call advance_to_locator(nout,l,andh)
             do ir=1,ntrh
-               nn=nint(xss(li+ir))
+               nn=nint(xss(rlocator))               ! relative locator position
                if (nn.gt.0) then
+                  call advance_to_locator(nout,l,andh+nn-1)
                   ne=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
+                  call write_integer(nout,l)                 ! NE
+                  call write_real_list(nout,l,ne)            ! E (NE values)
+                  ielocator=l
+                  call write_integer_list(nout,l,ne)         ! L (NE values)
                   do j=1,ne
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
-                  ll=l-1
-                  do j=1,ne
-                     call typen(l,nout,1)
-                     l=l+1
-                  enddo
-                  do j=1,ne
-                     nn=nint(xss(ll+j))
-                     if (nn.gt.0) then
-                        do k=1,33
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
-                     else if (nn.lt.0) then
-                        call typen(l,nout,1)
-                        l=l+1
+                     nn=nint(xss(ielocator))                 ! relative locator position
+                     call advance_to_locator(nout,l,andh+iabs(nn)-1)
+                     if (nn.gt.0) then                    ! 32 equiprobable bins
+                        call write_real_list(nout,l,33)
+                     else if (nn.lt.0) then               ! tabulated angular
+                        call write_integer(nout,l)        ! JJ - interpolation flag
                         np=nint(xss(l))
-                        call typen(l,nout,1)
-                        l=l+1
-                        nw=3*np
-                        do k=1,nw
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
+                        call write_integer(nout,l)        ! NP
+                        call write_real_list(nout,l,3*np) ! CS, PDF, CDF (each NP values)
                      endif
+                     ielocator=ielocator+1
                   enddo
                endif
+               rlocator=rlocator+1
             enddo
 
             !--ldlwh block
-            li=l-1
-            do k=1,ntrh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call advance_to_locator(nout,l,ldlwh)
+            rlocator=l
+            call write_integer_list(nout,l,ntrh) ! L (ntrh values)
 
-            !--dlwh block
+            !--dlwh block - format equal to dlw block
+            call advance_to_locator(nout,l,dlwh)
             do ii=1,ntrh
-               nn=nint(xss(li+ii))
+               nn=nint(xss(rlocator))               ! relative locator position
                if (nn.gt.0) then
-                  call typen(l,nout,1)
-                  l=l+1
+                  call advance_to_locator(nout,l,dlwh+nn-1)
+                  call write_integer(nout,l)            ! LNW
                   law=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  call typen(l,nout,1)
-                  l=l+1
+                  call write_integer(nout,l)            ! LAW
+                  call write_integer(nout,l)            ! IDAT
                   nrr=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  if (nrr.ne.0) then
-                     nw=2*nrr
-                     do k=1,nw
-                        call typen(l,nout,1)
-                        l=l+1
-                     enddo
+                  call write_integer(nout,l)               ! NR
+                  if (nrr.gt.0) then
+                     call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                   endif
                   ne=nint(xss(l))
-                  call typen(l,nout,1)
-                  l=l+1
-                  nw=2*ne
-                  do k=1,nw
-                     call typen(l,nout,2)
-                     l=l+1
-                  enddo
+                  call write_integer(nout,l)            ! NE
+                  call write_real_list(nout,l,2*ne)     ! E and P (each NE values)
+
+                  !--law 4
                   if (law.eq.4) then
                      nrr=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     ne=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     do k=1,ne
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
-                     do k=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                     enddo
-                     do k=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                        np=nint(xss(l))
-                        call typen(l,nout,1)
-                        l=l+1
-                        nw=3*np
-                        do kk=1,nw
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
-                     enddo
-                  else if (law.eq.44) then
-                     nrr=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     ne=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     do k=1,ne
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
-                     do k=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                     enddo
-                     do j=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                        np=nint(xss(l))
-                        call typen(l,nout,1)
-                        l=l+1
-                        nw=5*np
-                        do k=1,nw
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
-                     enddo
-                  else if (law.eq.33) then
-                     call typen(l,nout,2)
-                     l=l+1
-                     call typen(l,nout,2)
-                     l=l+1
-                  else if (law.eq.66) then
-                     call typen(l,nout,1)
-                     l=l+1
-                     call typen(l,nout,2)
-                     l=l+1
-                     call typen(l,nout,1)
-                     l=l+1
-                     nn=nint(xss(l))
-                     n=3*nn
-                     call typen(l,nout,1)
-                     l=l+1
-                     do k=1,n
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
-                  else if (law.eq.61) then
-                     nrr=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
-                     if (nrr.ne.0) then
-                        n=2*nrr
-                        do j=1,n
-                           call typen(l,nout,1)
-                           l=l+1
-                        enddo
+                     call write_integer(nout,l)               ! NR
+                     if (nrr.gt.0) then
+                        call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
                      endif
                      ne=nint(xss(l))
-                     call typen(l,nout,1)
-                     l=l+1
+                     call write_integer(nout,l)            ! NE
+                     call write_real_list(nout,l,ne)       ! E (NE values)
+                     ielocator=l
+                     call write_integer_list(nout,l,ne)    ! L (NE values)
                      do j=1,ne
-                        call typen(l,nout,2)
-                        l=l+1
-                     enddo
-                     do j=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                     enddo
-                     do j=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
+                        call advance_to_locator(nout,l,dlwh+nint(xss(ielocator))-1)
+                        call write_integer(nout,l)         ! INTT
                         np=nint(xss(l))
-                        call typen(l,nout,1)
-                        l=l+1
-                        n=3*np
-                        do k=1,n
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
-                        do k=1,np
-                           call typen(l,nout,1)
-                           l=l+1
-                        enddo
-                        do k=1,np
-                           call typen(l,nout,1)
-                           l=l+1
-                           nmu=nint(xss(l))
-                           call typen(l,nout,1)
-                           l=l+1
-                           nw=3*nmu
-                           do kk=1,nw
-                              call typen(l,nout,2)
-                              l=l+1
-                           enddo
-                        enddo
+                        call write_integer(nout,l)         ! NP
+                        call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+                        ielocator=ielocator+1
                      enddo
-                  else if (law.eq.67) then
+
+                  !--law 44
+                  else if (law.eq.44) then
+                     nrr=nint(xss(l))
+                     call write_integer(nout,l)               ! NR
+                     if (nrr.gt.0) then
+                        call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
+                     endif
+                     ne=nint(xss(l))
+                     call write_integer(nout,l)            ! NE
+                     call write_real_list(nout,l,ne)       ! E (NE values)
+                     ielocator=l
+                     call write_integer_list(nout,l,ne)    ! L (NE values)
                      do j=1,ne
-                        call typen(l,nout,1)
-                        l=l+1
-                        nmu=nint(xss(l))
-                        call typen(l,nout,1)
-                        l=l+1
-                        do k=1,nmu
-                           call typen(l,nout,2)
-                           l=l+1
-                        enddo
-                        do k=1,nmu
-                           call typen(l,nout,1)
-                           l=l+1
-                        enddo
-                        do k=1,nmu
-                           call typen(l,nout,1)
-                           l=l+1
-                           nep=nint(xss(l))
-                           call typen(l,nout,1)
-                           l=l+1
-                           nn=3*nep
-                           do n=1,nn
-                              call typen(l,nout,2)
-                              l=l+1
-                           enddo
-                        enddo
+                        call advance_to_locator(nout,l,dlwh+nint(xss(ielocator))-1)
+                        call write_integer(nout,l)         ! INTT
+                        np=nint(xss(l))
+                        call write_integer(nout,l)         ! NP
+                        call write_real_list(nout,l,5*np)  ! Eout, PDF, CDF, R, A (each NP values)
+                        ielocator=ielocator+1
                      enddo
+
+                  !--law 33
+                  else if (law.eq.33) then
+                     call write_real(nout,l)
+                     call write_real(nout,l)
+
+                  !--law 61
+                  else if (law.eq.61) then
+                     nrr=nint(xss(l))
+                     call write_integer(nout,l)               ! NR
+                     if (nrr.gt.0) then
+                        call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
+                     endif
+                     ne=nint(xss(l))
+                     call write_integer(nout,l)            ! NE
+                     call write_real_list(nout,l,ne)       ! E (NE values)
+                     ielocator=l
+                     call write_integer_list(nout,l,ne)    ! L (NE values)
+                     do j=1,ne
+                        call advance_to_locator(nout,l,dlwh+nint(xss(ielocator))-1)
+                        call write_integer(nout,l)         ! INTT
+                        np=nint(xss(l))
+                        call write_integer(nout,l)         ! NP
+                        call write_real_list(nout,l,3*np)  ! Eout, PDF, CDF (each NP values)
+                        oelocator=l
+                        call write_integer_list(nout,l,np) ! L (NP values)
+                        do k=1,np
+                           call advance_to_locator(nout,l,dlwh+nint(xss(oelocator))-1)
+                           call write_integer(nout,l)         ! JJ
+                           nmu=nint(xss(l))
+                           call write_integer(nout,l)         ! NMU
+                           call write_real_list(nout,l,3*nmu) ! Mu, PDF, CDF (each NMU values)
+                           oelocator=oelocator+1
+                        enddo
+                        ielocator=ielocator+1
+                     enddo
+
+                  !--law 66
+                  else if (law.eq.66) then
+                     call write_integer(nout,l)            ! NPSX
+                     call write_real(nout,l)               ! AP
+                     call write_integer(nout,l)            ! INTT
+                     np=nint(xss(l))
+                     call write_integer(nout,l)            ! NP
+                     call write_real_list(nout,l,3*np)     ! xi, PDF, CDF (each NP values)
+
+                  !--law 67
+                  else if (law.eq.67) then
+                     nrr=nint(xss(l))
+                     call write_integer(nout,l)               ! NR
+                     if (nrr.gt.0) then
+                        call write_integer_list(nout,l,2*nrr) ! NBT, INT (each NR values)
+                     endif
+                     ne=nint(xss(l))
+                     call write_integer(nout,l)             ! NE
+                     call write_real_list(nout,l,ne)        ! E (NE values)
+                     ielocator=l
+                     call write_integer_list(nout,l,ne)     ! L (NE values)
+                     do j=1,ne
+                        call advance_to_locator(nout,l,dlwh+nint(xss(ielocator))-1)
+                        call write_integer(nout,l)          ! INTMU
+                        nmu=nint(xss(l))
+                        call write_integer(nout,l)          ! NMU
+                        call write_real_list(nout,l,nmu)    ! MU (NMU values)
+                        oelocator=l
+                        call write_integer_list(nout,l,nmu) ! L (NMU values)
+                        do k=1,nmu
+                           call advance_to_locator(nout,l,dlwh+nint(xss(oelocator))-1)
+                           call write_integer(nout,l)       ! INTEP
+                           nep=nint(xss(l))
+                           call write_integer(nout,l)       ! NPEP
+                           call write_real_list(nout,l,3*nep) ! Eout, PDF, CDF (each NMU values)
+                           oelocator=oelocator+1
+                        enddo
+                        ielocator=ielocator+1
+                     enddo
+                   else
+                      write(text,'(''Undefined law for dlwh block: '',i3)') law
+                      call error('change',text,' ')
                   endif
                endif
+               rlocator=rlocator+1
             enddo
 
-            !--yh block
+            !--yh block - similar to yp
+            call advance_to_locator(nout,l,yh)
             nyh=nint(xss(l))
-            call typen(l,nout,1)
-            l=l+1
-            do k=1,nyh
-               call typen(l,nout,1)
-               l=l+1
-            enddo
+            call write_integer(nout,l)            ! NYP
+            call write_integer_list(nout,l,nyh)   ! MTY (NYP values)
          endif
+         plocator=plocator+10
       enddo
    endif
    call typen(0,nout,3)
@@ -14320,7 +14104,7 @@ contains
    use util ! provides mess
    use acecm ! provides mtname
    ! internals
-   integer::nerr,i,k,iaa,iin,nrl,nn,n,na,ic,id,ne,nr1
+   integer::nerr,i,k,iaa,iin,nrl,nn,nnew,n,na,ic,id,ne,nr1
    integer::nb,nk,ie,k1,im,ll,nlaw,icm,j,m,law,loci,intt
    integer::n2big,ishift,locj,nmu,loct,loc1,mftype,mtmult
    integer::ii,naa,locv,locc,iflag,imt,l1,l2,l3,mt,l
@@ -14335,6 +14119,7 @@ contains
    real(kr),parameter::oplus=1.000001e0_kr
    real(kr),parameter::zero=0
    real(kr),parameter::one=1
+   character(120)::text
 
    write(nsyso,'(/'' ace consistency checks''/&
                  &'' ----------------------'')')
@@ -14581,12 +14366,14 @@ contains
                      ep=xss(j+loci)
                      c=xss(j+2*nn+loci)
                      if (ep.gt.epmax.and.q.lt.zero) then
-                        write(nsyso,&
-                          '(''   consis:'',&
-                          &'' ep.gt.epmax'',1p,e13.6,&
-                          &'' with q.lt.0 for '',a,&
-                          &'' at e '',e14.6,'' ->'',e13.6)')&
-                          epmax,name(1:ll),e,ep
+                        write(text,'(''   consis:'',&
+                                    &'' ep.gt.epmax'',1p,e13.6,&
+                                    &'' with q.lt.0 for '',a,&
+                                    &'' mt'',1p,i0,&
+                                    &'' law '',1p,i0,&
+                                    &'' at e'',e13.6,'' -> eprime'',e13.6)')&
+                                    epmax,name(1:ll),mt,law,e,ep
+                        write(nsyso,'(a)') text
                         n2big=n2big+1
                         nerr=nerr+1
                      endif
@@ -14607,25 +14394,47 @@ contains
                      clast=c
                   enddo
                   if (n2big.gt.0) then
-                     write(nsyso,'(''   consis:'',&
-                       &'' shifting eprimes greater than epmax'',&
-                       &'' and renorming the distribution'')')
-                     do j=nn-n2big+1,nn
-                        ishift=j-nn-1
-                        ep=xss(j+loci)
-                        xss(j+loci)=sigfig(epmax,7,ishift)
-                        if (intt.eq.1) then
-                           p=(xss(j+2*nn+loci)-xss(j-1+2*nn+loci))&
-                             /(xss(j+loci)-xss(j-1+loci))
-                           xss(j-1+nn+loci)=p
-                           xss(j+nn+loci)=p
-                        else
-                           p=2*(xss(j+2*nn+loci)-xss(j-1+2*nn+loci))&
-                             /(xss(j+loci)-xss(j-1+loci))&
-                             -xss(j-1+nn+loci)
-                           xss(j+nn+loci)=p
-                        endif
+                     ishift=n2big-1
+                     if (ishift.eq.zero) then
+                        write(nsyso,'(''   consis:'',&
+                          &'' shifting one eprime greater than epmax'',&
+                          &'' and renorming the distribution'')')
+                     else
+                        write(nsyso,'(''   consis:'',&
+                          &'' shifting one eprime greater than epmax,'',&
+                          &'' removing '',i0,'' eprimes'',&
+                          &'' and renorming the distribution'')') ishift
+                     endif
+                     nnew=nn-ishift
+                     xss(loci)=nnew                    ! NE
+                     xss(loci+nnew)=sigfig(epmax,7,-1) ! last secondary energy
+                     if (intt.eq.1) then               ! histogram
+                       p=(1.0-xss(loci+nnew-1+2*nn))&
+                         /(xss(loci+nnew)-xss(loci+nnew-1))
+                       xss(loci+nnew-1+nn)=p           ! pdf, second last energy
+                       xss(loci+nnew+nn)=p             ! pdf, last energy
+                     else                              ! linear
+                       p=2.0*(1.0-xss(loci+nnew-1+2*nn))&
+                             /(xss(loci+nnew)-xss(loci+nnew-1))&
+                         -xss(loci+nnew-1+nn)
+                       xss(loci+nnew+nn)=p             ! pdf, last energy
+                     endif
+                     xss(loci+nnew+2*nn)=1.0           ! cdf, last energy
+                     do j=nnew+1,nn                    ! expunge points above
+                       xss(loci+j)=0.0                 ! Eprime
+                       xss(loci+j+nn)=0.0              ! pdf
+                       xss(loci+j+2*nn)=0.0            ! cdf
                      enddo
+                     if (nnew.ne.nn) then              ! move values if required
+                       do i=1,2
+                         do j=i*nnew+1,3*nn
+                           xss(loci+j)=xss(loci+j+ishift)
+                         enddo
+                       enddo
+                       do j=3*nnew+1,3*nn
+                         xss(loci+j)=0.0
+                       enddo
+                     endif
                   endif
                enddo
 
@@ -14661,31 +14470,26 @@ contains
                      c=xss(j+2*nn+loci)
                      r=xss(j+3*nn+loci)
                      if (ep.gt.epmax) then
+                        write(text,'(''   consis:'',&
+                                    &'' ep.gt.epmax'',1p,e13.6,&
+                                    &'' with q.lt.0 for '',a,&
+                                    &'' mt'',1p,i0,&
+                                    &'' law '',1p,i0,&
+                                    &'' at e'',e13.6,'' -> eprime'',e13.6)')&
+                                    epmax,name(1:ll),mt,law,e,ep
                         if (mt.ne.5.and.q.lt.0) then
-                           write(nsyso,'(''   consis:'',&
-                             &'' ep.gt.epmax'',1p,e13.6,&
-                             &'' with q.lt.0 for '',a,&
-                             &'' at e'',e14.6,'' ->'',e13.6)')&
-                             epmax,name(1:ll),e,ep
+                           write(nsyso,'(a)') text
                            n2big=n2big+1
                            nerr=nerr+1
                         else if (mt.eq.5.and.aw0.lt.180.) then
-                           write(nsyso,'(''   consis:'',&
-                             &'' ep.gt.epmax'',1p,e13.6,&
-                             &'' with q.lt.0 for '',a,&
-                             &'' at e'',e14.6,'' ->'',e13.6)')&
-                             epmax,name(1:ll),e,ep
+                           write(nsyso,'(a)') text
                            write(nsyso,'(''   consis:'',&
                              &''   awr.lt.180'',&
                              &''---this is probably an error.'')')
                            n2big=n2big+1
                            nerr=nerr+1
                         else if (mt.eq.5.and.aw0.ge.180.) then
-                           write(nsyso,'(''   consis:'',&
-                             &'' ep.gt.epmax'',1p,e13.6,&
-                             &'' with q.lt.0 for '',a,&
-                             &'' at e'',e14.6,'' ->'',e13.6)')&
-                             epmax,name(1:ll),e,ep
+                           write(nsyso,'(a)') text
                            write(nsyso,&
                              &'(''   consis: awr.ge.180---'',&
                              &''there could be a legitimate'',&
@@ -14718,25 +14522,50 @@ contains
                      endif
                   enddo
                   if (n2big.gt.0) then
-                     write(nsyso,'(''   consis:'',&
-                       &'' shifting eprimes greater than epmax'',&
-                       &'' and renorming the distribution'')')
-                     do j=nn-n2big+1,nn
-                        ishift=j-nn-1
-                        ep=xss(j+loci)
-                        xss(j+loci)=sigfig(epmax,7,ishift)
-                        if (intt.eq.1) then
-                           p=(xss(j+2*nn+loci)-xss(j-1+2*nn+loci))&
-                            /(xss(j+loci)-xss(j-1+loci))
-                           xss(j-1+nn+loci)=p
-                           xss(j+nn+loci)=p
-                        else
-                           p=2*(xss(j+2*nn+loci)-xss(j-1+2*nn+loci))&
-                            /(xss(j+loci)-xss(j-1+loci))&
-                             -xss(j-1+nn+loci)
-                           xss(j+nn+loci)=p
-                        endif
+                     ishift=n2big-1
+                     if (ishift.eq.zero) then
+                        write(nsyso,'(''   consis:'',&
+                          &'' shifting one eprime greater than epmax'',&
+                          &'' and renorming the distribution'')')
+                     else
+                        write(nsyso,'(''   consis:'',&
+                          &'' shifting one eprime greater than epmax,'',&
+                          &'' removing '',i0,'' eprimes'',&
+                          &'' and renorming the distribution'')') ishift
+                     endif
+                     ishift=n2big-1
+                     nnew=nn-ishift
+                     xss(loci)=nnew                    ! NE
+                     xss(loci+nnew)=sigfig(epmax,7,-1) ! last secondary energy
+                     if (intt.eq.1) then               ! histogram
+                       p=(1.0-xss(loci+nnew-1+2*nn))&
+                         /(xss(loci+nnew)-xss(loci+nnew-1))
+                       xss(loci+nnew-1+nn)=p           ! pdf, second last energy
+                       xss(loci+nnew+nn)=p             ! pdf, last energy
+                     else                              ! linear
+                       p=2.0*(1.0-xss(loci+nnew-1+2*nn))&
+                             /(xss(loci+nnew)-xss(loci+nnew-1))&
+                         -xss(loci+nnew-1+nn)
+                       xss(loci+nnew+nn)=p             ! pdf, last energy
+                     endif
+                     xss(loci+nnew+2*nn)=1.0           ! cdf, last energy
+                     do j=nnew+1,nn                    ! expunge points above
+                       xss(loci+j)=0.0                 ! Eprime
+                       xss(loci+j+nn)=0.0              ! pdf
+                       xss(loci+j+2*nn)=0.0            ! cdf
+                       xss(loci+j+3*nn)=0.0            ! precompound fraction
+                       xss(loci+j+4*nn)=0.0            ! slope
                      enddo
+                     if (nnew.ne.nn) then              ! move values if required
+                       do i=1,4
+                         do j=i*nnew+1,5*nn
+                           xss(loci+j)=xss(loci+j+ishift)
+                         enddo
+                       enddo
+                       do j=5*nnew+1,5*nn
+                         xss(loci+j)=0.0
+                       enddo
+                     endif
                   endif
                enddo
 
@@ -15236,6 +15065,14 @@ contains
    !--colored pages
    ipcol=2
    iwcol=3
+
+   ! iniatialise
+   k=0
+   kf=0
+   kc=0
+   iif=0
+   iic=0
+   mtl=0
 
    !--start the viewr input text
    call openz(nout,1)
@@ -16813,6 +16650,7 @@ contains
    real(kr),parameter::zero=0
    integer,parameter::nden=4000
    mtlast=0
+   mtl=0
    ilev=0
 
    !--loop over the inelastic levels
@@ -17190,6 +17028,9 @@ contains
    real(kr),parameter::zero=0
    real(kr),parameter::one=1
 
+   ! initialise
+   it=0
+
    !--loop over angular distributions
    nr1=nr+1
    do nn=1,nr1
@@ -17398,11 +17239,7 @@ contains
    integer::l,j,kf,n,i,ne,major,minor,it,nr1
    character(1)::qu=''''
    real(kr),parameter::big=1.0e10_kr
-   real(kr),parameter::small=1.e-12_kr
-   real(kr),parameter::ten=10.e0_kr
    real(kr),parameter::step=1.2e0_kr
-   real(kr),parameter::zero=0
-   real(kr),parameter::one=1.e0_kr
 
    !--set up the page for the total nubar curve
    xmin=big
@@ -17975,8 +17812,6 @@ contains
    real(kr)::xmin,xmax,ymin,ymax,xstep,ystep,x,y,decay,frac,xtag,ytag
    character(1)::qu=''''
    real(kr),parameter::big=1.0e10_kr
-   real(kr),parameter::small=1.e-12_kr
-   real(kr),parameter::ten=10.e0_kr
    real(kr),parameter::step=1.2e0_kr
    real(kr),parameter::scale=1.e2_kr
    real(kr),parameter::zero=0
@@ -18186,6 +18021,8 @@ contains
    enddo
    egmth=0
    egm14=0
+   s=0
+   iimax=0
 
    !--loop over reactions
    if (ntrp.ne.0) then
@@ -19442,6 +19279,7 @@ contains
    real(kr),parameter::one=1
 
    !--initialize
+   inow=0
    if (ep.lt.zero) then
       intmu=nint(a7(loci))
       nmu=nint(a7(loci+1))
@@ -19684,5 +19522,3 @@ contains
    end subroutine ascll
 
 end module acefc
-
-
