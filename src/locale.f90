@@ -9,11 +9,12 @@ module locale
    ! in subroutine timer when a C-type call is needed.  Caution: the
    ! settings for k4 and k8 may not be portable--some systems might
    ! use 1 and 2 instead of 4 and 8 for these two kinds.
+   use, intrinsic :: iso_fortran_env
    implicit none
    private
    character(8),public::lab='lanl t2'
    character(8),public::mx='        '
-   integer,parameter,public::kr=selected_real_kind(12,300)
+   integer,parameter,public::kr=REAL128
    integer,parameter,public::k4=4
    integer,parameter,public::k8=8
 end module locale

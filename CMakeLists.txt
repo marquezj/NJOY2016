@@ -48,7 +48,7 @@ endif()
 set( CMAKE_Fortran_MODULE_DIRECTORY "${CMAKE_BINARY_DIR}/fortran_modules" CACHE PATH "directory for fortran modules" )
 file( MAKE_DIRECTORY "${CMAKE_Fortran_MODULE_DIRECTORY}" ) 
 
-set( njoy_GNU_Linux_common_flags "-Wall" "-Wextra" )
+set( njoy_GNU_Linux_common_flags "-Wall" "-Wextra" "-mcmodel=medium")
 set( njoy_GNU_Linux_DEBUG_flags "-O0" "-g" "-gdwarf-3" "-frounding-math" "-fsignaling-nans" "-fcheck=all" "-ffpe-trap=invalid,zero,overflow" )
 set( njoy_GNU_Linux_RELEASE_flags "-O3" "-DNDEBUG" )
 set( njoy_GNU_Linux_strict_flags "-Werror" )

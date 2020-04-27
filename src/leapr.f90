@@ -1717,8 +1717,6 @@ contains
    if (y.le.one) then
       bzero=bessi0*exp(-dwc)
       do i=1,imax
-         bminus(i)=0
-         bplus(i)=0
          if (bn(i).ne.zero) then
             arg=-dwc-i*betai/2
             bplus(i)=0
@@ -1728,16 +1726,11 @@ contains
             arg=-dwc+i*betai/2
             bminus(i)=exp(arg)*bn(i)
             if (bminus(i).lt.tiny) bminus(i)=0
-         else
-            bplus(i)=0
-            bminus(i)=0
          endif
       enddo
    else
       bzero=bessi0*exp(-dwc+x)
       do i=1,imax
-         bminus(i)=0
-         bplus(i)=0
          if (bn(i).ne.zero) then
             bplus(i)=0
             arg=-dwc-i*betai/2+x
@@ -1747,9 +1740,6 @@ contains
             arg=-dwc+i*betai/2+x
             bminus(i)=exp(arg)*bn(i)
             if (bminus(i).lt.tiny) bminus(i)=0
-         else
-            bplus(i)=0
-            bminus(i)=0
          endif
       enddo
    endif
