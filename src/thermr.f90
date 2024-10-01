@@ -1663,9 +1663,10 @@ contains
    ! lasym= 0 or 1 = traditional endf definitions.
    ! lasym= 2 or 3 = traditional lasym + 2
    !               = leapr's isabt=1 option was used.
-   if (lasym.gt.1) call error ('calcem','isabt=1 pendf tape found',&
-                         'thermr cannot process this format')
-
+   ! lasym=0 S(a,b)*exp(-b/2) for negative beta branch
+   ! lasym=1 S(a,b)*exp(-b/2) for positive and negative beta
+   ! lasym=2 S(a,b)           for negative beta branch
+   ! lasym=3 S(a,b)           for positive and negative beta
    lat=l2h
    call listio(nendf,0,0,scr,nb,nw)
    ilog=l1h
@@ -1793,7 +1794,11 @@ contains
         &'' results may be bad for transfers larger than '',&
         &f8.3,'' ev.'')') tmax
    endif
-   tmax=beta(nbeta)*bk*temp
+   if (lasym.eq.0.or.lasym.eq.2) then
+      tmax=beta(nbeta)*bk*temp
+   else
+      tmax=-beta(1)*bk*temp
+   endif
    if (lat.eq.1) tmax=tmax*tevz/(bk*temp)
    test=5
    if (tmax.lt.test) then
@@ -1990,7 +1995,7 @@ contains
       y(il,1)=yt(il)
    enddo
    jbeta=-nbeta
-   if (lasym.gt.0) jbeta=1
+   if ((lasym.eq.1).or.(lasym.eq.3)) jbeta=1
    j=0
    iskip=0
 
@@ -2516,7 +2521,7 @@ contains
    if (lat.eq.1) b=b*tev/tevz
    if (lat.eq.1) a=a*tev/tevz
    if (a.gt.alpha(nalpha)) go to 170
-   if (lasym.eq.1) then
+   if ((lasym.eq.1).or.(lasym.eq.3)) then
       bbm=bb
       if (lat.eq.1) bbm=bb*tev/tevz
       if (bbm.gt.beta(nbeta)) go to 170
@@ -2527,7 +2532,7 @@ contains
    nb1=nbeta-1
    na1=nalpha-1
    bbb=b
-   if (lasym.eq.1.and.bb.lt.zero) bbb=-b
+   if (((lasym.eq.1).or.(lasym.eq.3)).and.bb.lt.zero) bbb=-b
    do i=1,nb1
       ib=i
       if (bbb.lt.beta(i+1)) exit
@@ -2537,7 +2542,7 @@ contains
       if (a.lt.alpha(i+1)) exit
    enddo
    if (cliq.eq.zero.or.a.ge.alpha(1)) go to 150
-   if (lasym.eq.1) go to 150
+   if ((lasym.eq.1).or.(lasym.eq.3)) go to 150
    if (b.gt.test1) go to 150
    s=sab(1,1)+log(alpha(1)/a)/2-cliq*b**2/a
    if (s.lt.sabflg) s=sabflg
@@ -2560,7 +2565,19 @@ contains
    call terpq(beta(ib),s1,beta(ib+1),s2,beta(ib+2),s3,bbb,s)
   160 continue
    sig=0
-   if (s-bb/2.gt.sabflg) sig=exp(s-bb/2)
+   if ((lasym.eq.0).or.(lasym.eq.1)) then
+     if (s-bb/2.gt.sabflg) sig=exp(s-bb/2)
+   endif
+   if ((lasym.eq.2)) then
+     if (bb.lt.zero) then
+      if (s.gt.sabflg) sig=exp(s)
+    else
+       if (s-bb.gt.sabflg) sig=exp(s-bb)
+     endif
+   endif
+   if ((lasym.eq.3)) then
+     if (s.gt.sabflg) sig=exp(s)
+   endif
    sig=sigc*sb*sig
    if (sig.lt.sigmin) sig=0
    return
