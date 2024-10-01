@@ -2592,8 +2592,6 @@ contains
       if (-arg.gt.sabflg) s2=exp(-arg)/(c*sqrt(a*tfff2*rtev))
       sig=sig+sigc*sb2*s2
    endif
-    if (abs(e-10).lt..01.and.abs(u-.99219).lt..0001) then
-    endif
    if (sig.lt.sigmin) sig=0
    return
 
