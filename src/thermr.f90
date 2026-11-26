@@ -1564,12 +1564,12 @@ contains
    integer::nr,np,nwtab,nl,nlt,nlp,nlp1,nnl,jmax,nne
    integer::i,ia,nl1,ltt,loc,l,jscr,ilog
    integer::matd,itprnt,nb,nw,ni,nbeta,lt,it,nalpha
-   integer::itrunc,ib,ip,ir,idis,ie,nmu,nep,istart,iend
+   integer::ib,ip,ir,idis,ie,nmu,nep,istart,iend
    integer::jbeta,j,iskip,il,k,jnz,ll,jj,ii,nexn,ien,isave
     integer::nll
    real(kr)::smz,t1,t,tmax,test,tempt,tt1,ttn,tnxt,xm
    real(kr)::uu,uum,ym,test2,xlast,ulast,xs
-   real(kr)::b,diff,enow,ep,sabmin,tev,ylast
+   real(kr)::b,diff,enow,ep,tev,ylast
    real(kr)::u,xl,yl,sum
    real(kr)::tone,elo
    integer,parameter::ngrid=118
@@ -1607,6 +1607,8 @@ contains
      7.00e0_kr,7.65e0_kr,8.40e0_kr,9.15e0_kr,9.85e0_kr,10.00e0_kr/)
    real(kr),parameter::unity=1.0e0_kr
    real(kr),parameter::sabflg=-225.e0_kr
+   real(kr),parameter::sabzer=-1.e30_kr
+   real(kr),parameter::lnzer=-999.e0_kr
    real(kr),parameter::eps=1.e-4_kr
    real(kr),parameter::tolmin=5.e-7_kr
    real(kr),parameter::half=0.5e0_kr
@@ -1620,12 +1622,11 @@ contains
    real(kr),parameter::uumin=0.00001e0_kr
    real(kr),parameter::yumin=2.e-7_kr
    integer,parameter::nlpmx=10
-   save nwtab,sabmin,nl,nlt,nlp,nlp1,nl1,nnl,jmax,nne
+   save nwtab,nl,nlt,nlp,nlp1,nl1,nnl,jmax,nne
    tevz=therm
 
    !--initialize if itemp=1.
    if (itemp.eq.1) then
-      sabmin=exp(sabflg)
       nwtab=8
       nl=nbin+1
       if (nl.gt.nlmax)&
@@ -1711,8 +1712,10 @@ contains
    allocate(beta(nbeta))
    allocate(sab(nalpha,nbeta))
 
-   !--read s(alpha,beta) data into memory
-   itrunc=0
+   !--read s(alpha,beta) data into memory.
+   !--keep ln S for every nonzero value (small values on the energy-loss
+   !--side give finite cross sections after the exp(-beta/2) factor);
+   !--zeros (and leapr's -999 marker for ln S) are flagged with sabzer
    ib=1
    beta(ib)=b
   120 continue
@@ -1745,13 +1748,14 @@ contains
    if (t.eq.t1) l=l+2*nint(scr(loc+4))+1
    do ia=1,nalpha
       if (ilog.eq.0) then
-         if (scr(l).gt.sabmin) sab(ia,ib)=log(scr(l))
-         if (scr(l).le.sabmin) then
-            if (scr(l).gt.zero) itrunc=1
-            sab(ia,ib)=sabflg
+         if (scr(l).gt.zero) then
+            sab(ia,ib)=log(scr(l))
+         else
+            sab(ia,ib)=sabzer
          endif
       else
          sab(ia,ib)=scr(l)
+         if (scr(l).le.lnzer) sab(ia,ib)=sabzer
       endif
       if (t.eq.t1) l=l+1
       l=l+1
@@ -1778,21 +1782,6 @@ contains
    it=0
    go to 120
   180 continue
-   if (itrunc.eq.1) then
-      tmax=2*(-sabflg-5)*bk*temp
-      write(nsyso,'(/&
-        &'' ***warning***'',&
-        &''sab contains numbers that are too small'',&
-        &'' to represent on this machine.''/&
-        &'' results may be bad for transfers larger than '',&
-        &f8.3,'' ev.'')') tmax
-      write(nsyse,'(/&
-        &'' ***warning***'',&
-        &''sab contains numbers that are too small'',&
-        &'' to represent on this machine.''/&
-        &'' results may be bad for transfers larger than '',&
-        &f8.3,'' ev.'')') tmax
-   endif
    tmax=beta(nbeta)*bk*temp
    if (lat.eq.1) tmax=tmax*tevz/(bk*temp)
    test=5
@@ -1962,7 +1951,7 @@ contains
    cliq=0
    if (iinc.eq.1) go to 305
    if (sab(1,1).gt.sab(2,1))&
-     cliq=(sab(1,1)-sab(1,2))*alpha(1)/beta(2)**2
+     cliq=(sab(1,1)-max(sab(1,2),sabflg))*alpha(1)/beta(2)**2
 
    !--loop over given incident energy grid.
   305 continue
@@ -2284,7 +2273,7 @@ contains
    cliq=0
    if (iinc.eq.1) go to 515
    if (sab(1,1).gt.sab(2,1))&
-     cliq=(sab(1,1)-sab(1,2))*alpha(1)/beta(2)**2
+     cliq=(sab(1,1)-max(sab(1,2),sabflg))*alpha(1)/beta(2)**2
 
    !--loop over given incident energy grid.
    !--the first pass computes the cross section and mu grid
@@ -2497,6 +2486,7 @@ contains
    real(kr)::tfff,tfff2
    real(kr),parameter::sigmin=1.e-10_kr
    real(kr),parameter::sabflg=-225.e0_kr
+   real(kr),parameter::sabzer=-1.e30_kr
    real(kr),parameter::amin=1.e-6_kr
    real(kr),parameter::test1=0.2e0_kr
    real(kr),parameter::test2=30.e0_kr
@@ -2544,10 +2534,12 @@ contains
    go to 160
   150 continue
    if (a*az.lt.test2.and.b.lt.test2) go to 155
-   if (sab(ia,ib).le.sabflg) go to 170
-   if (sab(ia+1,ib).le.sabflg) go to 170
-   if (sab(ia,ib+1).le.sabflg) go to 170
-   if (sab(ia+1,ib+1).le.sabflg) go to 170
+   !--sct only where the table has zeros; small values are used,
+   !--the floor applies to the physical value s-bb/2 below
+   if (sab(ia,ib).le.sabzer) go to 170
+   if (sab(ia+1,ib).le.sabzer) go to 170
+   if (sab(ia,ib+1).le.sabzer) go to 170
+   if (sab(ia+1,ib+1).le.sabzer) go to 170
   155 continue
    if (ia+1.eq.nalpha) ia=ia-1
    if (ib+1.eq.nbeta) ib=ib-1
@@ -2625,7 +2617,6 @@ contains
    real(kr)::x1,y1,x2,y2,x3,y3,x,y
    ! internals
    real(kr)::b,c
-   real(kr),parameter::sabflg=-225.e0_kr
    real(kr),parameter::step=2.e0_kr
 
    if (x.lt.x1) then
@@ -2653,7 +2644,6 @@ contains
       c=c-(y2-y1)/((x2-x1)*(x3-x2))
       y=y1+b*(x-x1)+c*(x-x1)*(x-x1)
    endif
-   if (y.lt.sabflg) y=sabflg
    return
    end subroutine terpq
 

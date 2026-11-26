@@ -50,6 +50,10 @@ module leapm
    ! min phonon expansion for time warning message
    integer,parameter,public::maxnphon=250
 
+   ! largest step in ln(s) between beta nodes for which ln(s) is
+   ! interpolated quadratically in sbfill and sint (as in thermr)
+   real(kr),parameter::qstep=2.e0_kr
+
 contains
 
    subroutine leapr
@@ -130,6 +134,10 @@ contains
    !    ntempr  number of temperatures (def=1)
    !    iprint  print control (0=min, 1=more, 2=most, def=1)
    !    nphon   phonon-expansion order (def=100)
+   !            0 = set for each temperature from the poisson tail
+   !            of the expansion: nphon=mu+6*sqrt(mu)+10, with
+   !            mu=lambda*alpha_max (debye-waller lambda of the
+   !            continuous spectrum, largest alpha at that temperature)
    !
    ! card 4 - endf output control
    !    mat     endf mat number
@@ -159,6 +167,16 @@ contains
    !    nsk            0   none (default)
    !                   1   vineyard
    !                   2   skold
+   !
+   !            Combinations of ncold and nsk allow the use of
+   !            different cold hydrogen models:
+   !
+   !            ncold=1/2/3/4 nsk=0: ENDF/B-VI models, (+)
+   !            ncold=1/2/3/4 nsk=1: Granada model with Vineyard approximation, (*)
+   !            ncold=1/2/3/4 nsk=2: Granada model with Skold approximation, (*)
+   !
+   !            (+) Scattering lengths are hard coded.
+   !            (*) Scattering lengths are computed from spr and cfrac.
    !
    ! card 6 - secondary scatterer control
    !    nss     number of secondary scatterers (0 or 1)
@@ -361,14 +379,18 @@ contains
                if (allocated(ska)) deallocate(ska)
                allocate(ska(nka))
                read(nsysi,*) (ska(i),i=1,nka)
+               if (ncold.gt.0) then
+                  write(nsyso,'(/'' s(kappa) for COLDH'')')
+               else
                if (nsk.eq.1) write(nsyso,'(/'' s(kappa) for vineyard method'')')
                if (nsk.eq.2) write(nsyso,'(/'' s(kappa) for skold method'')')
+               endif
                do i=1,nka
                   write(nsyso,'(1p,2e12.4)') dka*i,ska(i)
                enddo
             endif
 
-            !--read in coherent fraction for skold method
+            !--read in coherent fraction for skold or vineyard method
             if (nsk.gt.0) read(nsysi,*) cfrac
 
          endif
@@ -444,7 +466,8 @@ contains
    deallocate(dwp1)
    deallocate(tempf)
    deallocate(tempf1)
-
+   if (allocated(ssp)) deallocate(ssp)
+   if (allocated(ska)) deallocate(ska)
    !--finished
    call closz(nout)
    call timer(time)
@@ -466,31 +489,41 @@ contains
    real(kr)::temp
    integer::itemp,np,maxn
    ! internals
-   integer::i,j,k,n,npn,npl,iprt,jprt
+   integer::i,j,k,n,npn,npl,iprt,jprt,nord
    integer,allocatable,dimension(:)::maxt
    character(3)::tag
    real(kr)::al,be,bel,ex,exx,st,add,sc,alp,alw,ssct,ckk,time
-   real(kr)::ff0,ff1,ff2,ff1l,ff2l,sum0,sum1
+   real(kr)::ff0,ff1,ff2,ff1l,ff2l,sum0,sum1,pmu
    real(kr),dimension(:),allocatable::p,tlast,tnow,xa
    real(kr),parameter::therm=0.0253e0_kr
-   real(kr),parameter::tiny=1.e-30_kr
+   real(kr),parameter::tiny=1.e-200_kr
    real(kr),parameter::explim=-250.e0_kr
    real(kr),parameter::zero=0
 
    !--write heading
    write(nsyso,'(/'' solid-type contributions to scattering law'')')
 
-   !--allocate temporary arrays
-   allocate(p(np1))
-   allocate(tlast(nphon*np1))
-   allocate(tnow(nphon*np1))
-   allocate(xa(nalpha))
-   allocate(maxt(nbeta))
-
    !--calculate various parameters for this temperature
+   allocate(p(np1))
    call start(itemp,p,np,deltab,tev)
    sc=1
    if (lat.eq.1) sc=therm/tev
+
+   !--phonon-expansion order: from the input, or (maxn=0) from the
+   !--poisson tail of the expansion at the largest alpha
+   nord=maxn
+   if (maxn.eq.0) then
+      pmu=f0*alpha(nalpha)*sc/arat
+      nord=int(pmu+6*sqrt(pmu)+10)
+      write(nsyso,'(/'' phonon-expansion order from the poisson tail'',&
+        &i8,''  (lambda*alpha_max ='',1p,e12.4,'')'')') nord,pmu
+   endif
+
+   !--allocate temporary arrays
+   allocate(tlast(nord*np1))
+   allocate(tnow(nord*np1))
+   allocate(xa(nalpha))
+   allocate(maxt(nbeta))
 
    !--start the phonon expansion sum with t1
    do i=1,np
@@ -519,12 +552,12 @@ contains
    if (iprint.eq.2) then
       write(nsyso,'(/'' normalization check for phonon expansion'')')
    endif
-   if (maxn.gt.maxnphon) then
+   if (nord.gt.maxnphon) then
       call timer(time)
       write(nsyse,'(/'' performing phonon expansion sum'',&
             &37x,f8.1,''s'')'),time
    endif
-   do n=2,maxn
+   do n=2,nord
       npn=np+npl-1
       call convol(p,tlast,tnow,np,npl,npn,deltab,ckk)
       if (iprint.eq.2) write(nsyso,'(5x,i5,f12.5)') n,ckk
@@ -540,7 +573,7 @@ contains
             add=st*exx
             if (add.lt.tiny) add=0
             ssm(k,j,itemp)=ssm(k,j,itemp)+add
-            if (ssm(k,j,itemp).ne.zero.and.n.ge.maxn) then
+            if (ssm(k,j,itemp).ne.zero.and.n.ge.nord) then
             if (add.gt.ssm(k,j,itemp)/1000.and.j.lt.maxt(k)) maxt(k)=j
             endif
          enddo
@@ -553,10 +586,10 @@ contains
          call timer(time)
          write(nsyse,'(2x,i5,'' of '',i5,&
                &'' loops done for phonon expansion sum'',17x,f8.1,''s'')')&
-               &n,maxn,time
+               &n,nord,time
       endif
    enddo
-   if (maxn.gt.maxnphon) then
+   if (nord.gt.maxnphon) then
       call timer(time)
       write(nsyse,'(/'' done with phonon expansion sum'',&
             &38x,f8.1,''s'')'),time
@@ -802,42 +835,85 @@ contains
    real(kr)::delta,ckk
    real(kr)::t1(n1),tlast(nl),tnext(nn)
    ! internals
-   integer::j,k,i1,i2
-   real(kr)::f1,f2,cc,be
-   real(kr),parameter::tiny=1.e-30_kr
+   integer::j,k,m,nf,nz,kmin,kmax,ka,kb
+   real(kr)::cc,be,w,hf,e
+   real(kr),dimension(:),allocatable::ex
+   real(kr),parameter::tiny=1.e-200_kr
    real(kr),parameter::zero=0
+   real(kr),parameter::half=0.5e0_kr
 
-   ckk=0
+   !--range of k with a nonzero result: tlast is zero outside
+   !--[nf,nz], so tnext(k)=0 for k<nf-n1+1 and k>nz+n1-1
+   nf=0
+   nz=0
+   do k=1,nl
+      if (tlast(k).ne.zero) then
+         if (nf.eq.0) nf=k
+         nz=k
+      endif
+   enddo
+   kmin=1
+   kmax=0
+   if (nf.gt.0) then
+      kmin=max(1,nf-n1+1)
+      kmax=min(nn,nz+n1-1)
+   endif
+
+   !--table of exp(-m*delta), up to the largest index used
+   allocate(ex(max(n1,kmax)+1))
+   do m=0,max(n1,kmax)
+      be=m*delta
+      ex(m+1)=exp(-be)
+   enddo
+
    do k=1,nn
       tnext(k)=0
+   enddo
+   if (nf.gt.0) then
+      !--j outside, k inside (contiguous, vectorizable); each tnext(k)
+      !--still accumulates the terms in increasing j, as before.
+      !--for fixed j the k range splits into segments without branches
+      !--(nl.ge.n1, so tlast(j-k+1) always exists for k<j):
+      !--  f1=tlast(k+j-1)*ex(j) for k.le.nl-j+1
+      !--  f2=tlast(j-k+1)*ex(j-k+1) for k.lt.j, tlast(k-j+1) for
+      !--     j.le.k.le.nl+j-1
       do j=1,n1
-         i1=k+j-2
-         i2=k-j
-         f1=0
-         be=(j-1)*delta
          if (t1(j).gt.zero) then
-            if (i1+1.le.nl) f1=tlast(i1+1)*exp(-be)
-            f2=0
-            if (i2.ge.0.and.i2+1.le.nl) then
-               f2=tlast(i2+1)
-            else if (i2.lt.0.and.1-i2.le.nl) then
-               be=-i2*delta
-               f2=tlast(1-i2)*exp(-be)
-            endif
-            cc=t1(j)*(f1+f2)
-            if (j.eq.1.or.j.eq.n1) cc=cc/2
-            tnext(k)=tnext(k)+cc
+            w=t1(j)
+            hf=1
+            if (j.eq.1.or.j.eq.n1) hf=half
+            e=ex(j)
+            ka=nl-j+1
+            kb=nl+j-1
+            !--k.lt.j
+            do k=kmin,min(kmax,j-1,ka)
+               tnext(k)=tnext(k)+w*(tlast(k+j-1)*e+tlast(j-k+1)*ex(j-k+1))*hf
+            enddo
+            do k=max(kmin,ka+1),min(kmax,j-1)
+               tnext(k)=tnext(k)+w*(tlast(j-k+1)*ex(j-k+1))*hf
+            enddo
+            !--k.ge.j
+            do k=max(kmin,j),min(kmax,kb,ka)
+               tnext(k)=tnext(k)+w*(tlast(k+j-1)*e+tlast(k-j+1))*hf
+            enddo
+            do k=max(kmin,j,ka+1),min(kmax,kb)
+               tnext(k)=tnext(k)+w*tlast(k-j+1)*hf
+            enddo
          endif
       enddo
+   endif
+   !--normalization check; tnext(k)=0 outside [kmin,kmax]
+   ckk=0
+   do k=kmin,kmax
       tnext(k)=tnext(k)*delta
       if (tnext(k).lt.tiny) tnext(k)=0
       cc=tnext(k)
-      be=(k-1)*delta
-      cc=cc+tnext(k)*exp(-be)
+      cc=cc+tnext(k)*ex(k)
       if (k.eq.1.or.k.eq.nn) cc=cc/2
       ckk=ckk+cc
    enddo
    ckk=ckk*delta
+   deallocate(ex)
    return
    end subroutine convol
 
@@ -865,7 +941,7 @@ contains
    real(kr),parameter::c2=1.42e0_kr
    real(kr),parameter::c3=.2e0_kr
    real(kr),parameter::c4=10.e0_kr
-   real(kr),parameter::tiny=1.e-30_kr
+   real(kr),parameter::tiny=1.e-200_kr
    real(kr),parameter::zero=0
 
    !--write heading for translational calculation
@@ -938,7 +1014,11 @@ contains
             enddo
             s=s*delta/3
             if (s.lt.tiny) s=0
-            st=terps(sd,nbt,delta,be)
+            if (be.ge.delta*(nbt-1)) then
+               st=sdiff(al,be)
+            else
+               st=terps(sd,nbt,delta,be)
+            endif
             if (st.gt.zero) s=s+exp(-al*f0)*st
 
             !--store results
@@ -1018,86 +1098,47 @@ contains
    ! This routine returns the -beta side of
    ! the asymmetric S(alpha,beta).
    ! Called by trans.
-   ! Uses besk1.
+   ! Uses sdiff.
    !--------------------------------------------------------------------
    use mainio ! provide nsyso
-   use physics ! provides pi
    ! externals
    integer::nsd,iprt,nu,ndmax
-   real(kr)::al,delta,check0,check1,f,bb,sfree
+   real(kr)::al,delta,check0,check1,f,bb
    real(kr)::ap(ndmax),sd(ndmax)
    ! internals
    integer::i,j,idone,icheck
-   real(kr)::d,c2,c3,c4,c5,c6,c7,c8,be,ex,wal
-   real(kr),parameter::quart=0.25e0_kr
+   real(kr)::be
    real(kr),parameter::eps=1.e-7_kr
    real(kr),parameter::zero=0
-   real(kr),parameter::one=1
    icheck=0
 
-   !--diffusion branch
-   if (c.ne.zero) then
-      if (iprt.eq.1.and.iprint.eq.2) write(nsyso,&
-        '(/4(4x,''beta'',4x,''ssdiff(-beta)''))')
-      d=twt*c
-      c2=sqrt(c*c+quart)
-      c3=2*d*al
-      c4=c3*c3
-      c8=c2*c3/pi
-      c3=2*d*c*al
-      be=0
-      j=1
-      idone=0
-      do while (idone.eq.0)
-         c6=sqrt(be*be+c4)
-         c7=c6*c2
-         if (c7.le.one) c5=c8*exp(c3+be/2)
-         if (c7.gt.one) then
-            c5=0
-            ex=c3-c7+be/2
-            c5=c8*exp(ex)
-         endif
-         sd(j)=c5*besk1(c7)/c6
-         ap(j)=be
-         be=be+delta
-         j=j+1
-         if (mod(j,2).eq.0) then
-            if (j.ge.ndmax) idone=1
-            if (eps*sd(1).ge.sd(j-1)) idone=1
-         endif
-      enddo
-      j=j-1
-      nsd=j
-      if (iprt.eq.1.and.iprint.eq.2)&
-        write(nsyso,'(0pf10.5,1pe15.7,0pf10.5,1pe15.7,0pf10.5,&
-        &1pe15.7,0pf10.5,1pe15.7)') (ap(i),sd(i),i=1,j,nu)
-
-   !--free-gas branch
-   else
-      if (iprt.eq.1.and.iprint.eq.2) write(nsyso,&
-        '(/4(4x,''beta'',4x,''ssfree(-beta)''))')
-      be=0
-      j=1
-      wal=twt*al
-      idone=0
-      do while (idone.eq.0)
-         ex=-(wal-be)**2/(4*wal)
-         sfree=exp(ex)/sqrt(4*pi*wal)
-         sd(j)=sfree
-         ap(j)=be
-         be=be+delta
-         j=j+1
-         if (mod(j,2).eq.0) then
-            if (j.ge.ndmax) idone=1
-            if (eps*sd(1).ge.sd(j-1)) idone=1
-         endif
-      enddo
-      j=j-1
-      nsd=j
-      if (iprt.eq.1.and.iprint.eq.2)&
-        write(nsyso,'(0pf10.5,1pe15.7,0pf10.5,1pe15.7,0pf10.5,&
-        &1pe15.7,0pf10.5,1pe15.7)') (ap(i),sd(i),i=1,j,nu)
+   if (iprt.eq.1.and.iprint.eq.2) then
+      if (c.ne.zero) then
+         write(nsyso,'(/4(4x,''beta'',4x,''ssdiff(-beta)''))')
+      else
+         write(nsyso,'(/4(4x,''beta'',4x,''ssfree(-beta)''))')
+      endif
    endif
+
+   !--diffusion (c>0) or free-gas (c=0) law on the beta grid
+   be=0
+   j=1
+   idone=0
+   do while (idone.eq.0)
+      sd(j)=sdiff(al,be)
+      ap(j)=be
+      be=be+delta
+      j=j+1
+      if (mod(j,2).eq.0) then
+         if (j.ge.ndmax) idone=1
+         if (eps*sd(1).ge.sd(j-1)) idone=1
+      endif
+   enddo
+   j=j-1
+   nsd=j
+   if (iprt.eq.1.and.iprint.eq.2)&
+     write(nsyso,'(0pf10.5,1pe15.7,0pf10.5,1pe15.7,0pf10.5,&
+     &1pe15.7,0pf10.5,1pe15.7)') (ap(i),sd(i),i=1,j,nu)
 
    !--check the moments of the distribution
    if (iprt.ne.1.or.iprint.ne.2) return
@@ -1120,6 +1161,59 @@ contains
      check0,check1
    return
    end subroutine stable
+
+   real(kr) function sdiff(al,be)
+   !--------------------------------------------------------------------
+   ! Diffusion (Egelstaff-Schofield, c>0) or free-gas (c=0) scattering
+   ! law for the translational weight twt, at one value of alpha and
+   ! beta (-beta side of the asymmetric S(alpha,beta)).
+   ! Called by stable to tabulate sd, and by trans for beta beyond
+   ! the tabulated kernel.
+   ! Uses besk1.
+   !--------------------------------------------------------------------
+   use physics ! provides pi
+   real(kr)::al,be
+   real(kr)::d,c2,c3,c4,c5,c6,c7,c8,ex,wal
+   real(kr),parameter::quart=0.25e0_kr
+   real(kr),parameter::zero=0
+   real(kr),parameter::one=1
+
+   if (c.ne.zero) then
+      d=twt*c
+      c2=sqrt(c*c+quart)
+      c3=2*d*al
+      c4=c3*c3
+      c8=c2*c3/pi
+      c3=2*d*c*al
+      c6=sqrt(be*be+c4)
+      c7=c6*c2
+      if (c7.le.one) then
+         c5=c8*exp(c3+be/2)
+      else
+         ex=c3-c7+be/2
+         c5=c8*exp(ex)
+      endif
+      sdiff=c5*besk1(c7)/c6
+   else
+      wal=twt*al
+      ex=-(wal-be)**2/(4*wal)
+      sdiff=exp(ex)/sqrt(4*pi*wal)
+   endif
+   return
+   end function sdiff
+
+   real(kr) function qlag(x,x1,y1,x2,y2,x3,y3)
+   !--------------------------------------------------------------------
+   ! Quadratic (Lagrange) interpolation through three points.
+   ! Called by sbfill and sint.
+   !--------------------------------------------------------------------
+   real(kr)::x,x1,y1,x2,y2,x3,y3
+
+   qlag=y1*(x-x2)*(x-x3)/((x1-x2)*(x1-x3))&
+       +y2*(x-x1)*(x-x3)/((x2-x1)*(x2-x3))&
+       +y3*(x-x1)*(x-x2)/((x3-x1)*(x3-x2))
+   return
+   end function qlag
 
    real(kr) function terps(sd,nsd,delta,be)
    !--------------------------------------------------------------------
@@ -1175,8 +1269,9 @@ contains
    real(kr)::sb(ndmax),s(ndmax),betan(nbeta)
    ! internals
    character(60)::strng
-   integer::i,j,idone
-   real(kr)::bmin,bmax,b,st,stm,arg,bet
+   integer::i,j,idone,jq
+   real(kr)::bmin,bmax,b,st,stm,arg,bet,sq
+   logical::qok
    real(kr),parameter::shade=1.00001e0_kr
    real(kr),parameter::slim=-225.e0_kr
    real(kr),parameter::zero=0
@@ -1234,6 +1329,28 @@ contains
             stm=log(s(j-1))
          endif
          sb(i)=st+(b-betan(j))*(stm-st)/(betan(j-1)-betan(j))
+         !--quadratic in ln(s), with the closer third node
+         jq=0
+         if (j.lt.nbeta) jq=j+1
+         if (j.gt.2) then
+            if (jq.eq.0) then
+               jq=j-2
+            else if (b-betan(j-2).lt.betan(j+1)-b) then
+               jq=j-2
+            endif
+         endif
+         if (jq.gt.0) then
+            if (s(j).gt.zero.and.s(j-1).gt.zero.and.s(jq).gt.zero) then
+               sq=log(s(jq))
+               if (jq.gt.j) then
+                  qok=abs(st-stm).le.qstep.and.abs(sq-st).le.qstep
+               else
+                  qok=abs(stm-sq).le.qstep.and.abs(st-stm).le.qstep
+               endif
+               if (qok) sb(i)=qlag(b,betan(j-1),stm,betan(j),st,&
+                 betan(jq),sq)
+            endif
+         endif
          if (bet.gt.zero) sb(i)=sb(i)-bet
          arg=sb(i)
          sb(i)=0
@@ -1325,7 +1442,7 @@ contains
    ! Uses bfact, bfill, exts, sint.
    !--------------------------------------------------------------------
    use mainio  ! provides nsyso
-   use util    ! provides timer
+   use util    ! provides timer,mess
    use physics ! provides bk (boltzmann constant)
    ! externals
    integer::itemp
@@ -1339,12 +1456,14 @@ contains
    real(kr)::bdeln(50),eb(50),dbw(50),ar(50),dist(50)
    real(kr)::bzero,bplus(50),bminus(50)
    real(kr),dimension(:),allocatable::betan,exb,sexpb
+   integer::nfull
+   character(60)::strng
    real(kr),dimension(:),allocatable::bex,rdbex,sex
    real(kr),dimension(:),allocatable::bes,wts,ben,wtn
    real(kr),parameter::therm=.0253e0_kr
-   real(kr),parameter::small=1.e-8_kr
+   real(kr),parameter::small=1.e-150_kr
    real(kr),parameter::vsmall=1.e-10_kr
-   real(kr),parameter::tiny=1.e-20_kr
+   real(kr),parameter::tiny=1.e-200_kr
    real(kr),parameter::zero=0
 
    !--write heading
@@ -1359,11 +1478,12 @@ contains
    allocate(betan(nbeta))
    allocate(exb(nbeta))
    allocate(sexpb(nbeta))
+   nfull=0
    maxbb=2*nbeta+1
    allocate(bex(maxbb))
    allocate(rdbex(maxbb))
    allocate(sex(maxbb))
-   maxdd=500
+   maxdd=200000
    allocate(bes(maxdd))
    allocate(wts(maxdd))
    allocate(ben(maxdd))
@@ -1495,21 +1615,13 @@ contains
       enddo
       n=nn
 
+      !--count the alpha values where lines were dropped at maxdd
+      if (n.ge.maxdd) nfull=nfull+1
+
       !--sort the discrete lines
       !--and throw out the smallest ones
       nn=n-1
-      do i=2,n-1
-         do j=i+1,n
-            if (wts(j).ge.wts(i)) then
-               save=wts(j)
-               wts(j)=wts(i)
-               wts(i)=save
-               save=bes(j)
-               bes(j)=bes(i)
-               bes(i)=save
-            endif
-         enddo
-      enddo
+      if (n.gt.2) call sortdd(wts(2:n),bes(2:n),n-1)
       i=0
       idone=0
       do while (i.lt.nn.and.idone.eq.0)
@@ -1654,6 +1766,11 @@ contains
    deallocate(sex)
    deallocate(rdbex)
    deallocate(bex)
+   if (nfull.gt.0) then
+      write(strng,'(''discrete lines reached maxdd at'',i5,'' alpha values'')')&
+        nfull
+      call mess('discre',strng,'lines with the smallest weights were dropped')
+   endif
    deallocate(sexpb)
    deallocate(exb)
    deallocate(betan)
@@ -1669,9 +1786,9 @@ contains
    real(kr)::x,dwc,betai
    real(kr)::bzero,bplus(50),bminus(50)
    ! internals
-   integer::i,imax,j
+   integer::i,imax,j,k
    real(kr)::bn(50)
-   real(kr)::y,u,v,bessi0,bessi1,rat,arg
+   real(kr)::y,u,v,bessi0,bessi1,rat,arg,lx,lg,term,ssum,lnb,lnt
    real(kr),parameter::c0=3.75e0_kr
    real(kr),parameter::c1=1.e0_kr
    real(kr),parameter::c2=3.5156229e0_kr
@@ -1706,7 +1823,7 @@ contains
    real(kr),parameter::c31=0.00163801e0_kr
    real(kr),parameter::c32=0.01031555e0_kr
    real(kr),parameter::big=1.e10_kr
-   real(kr),parameter::tiny=1.e-30_kr
+   real(kr),parameter::tiny=1.e-200_kr
    real(kr),parameter::zero=0
    real(kr),parameter::one=1
 
@@ -1732,68 +1849,121 @@ contains
       bessi1=bessi1/sqrt(x)
    endif
 
-   !--generate higher orders by reverse recursion
    imax=50
-   bn(imax)=0
-   bn(imax-1)=1
-   i=imax-1
-   do while (i.gt.1)
-      bn(i-1)=bn(i+1)+i*(2/x)*bn(i)
-      i=i-1
-      if (bn(i).ge.big) then
-         do j=i,imax
-            bn(j)=bn(j)/big
-         enddo
-      endif
-   enddo
-   rat=bessi1/bn(1)
-   do i=1,imax
-      bn(i)=bn(i)*rat
-      if (bn(i).lt.tiny) bn(i)=0
-   enddo
-
-   !--apply exponential terms to bessel functions
    if (y.le.one) then
+      !--small argument: ln I_n(x) from its power series, combined
+      !--with the exponential terms in log space (the reverse recursion
+      !--overflows for tiny x, e.g. a high-energy oscillator at low T)
       bzero=bessi0*exp(-dwc)
+      lnt=log(tiny)
+      lx=log(x/2)
+      lg=0
       do i=1,imax
-         bminus(i)=0
+         lg=lg+log(real(i,kr))
+         term=1
+         ssum=1
+         k=0
+         do while (term.gt.1.e-17_kr*ssum.and.k.lt.200)
+            k=k+1
+            term=term*(x*x/4)/(k*(i+k))
+            ssum=ssum+term
+         enddo
+         lnb=i*lx-lg+log(ssum)
          bplus(i)=0
-         if (bn(i).ne.zero) then
-            arg=-dwc-i*betai/2
-            bplus(i)=0
-            bplus(i)=exp(arg)*bn(i)
-            if (bplus(i).lt.tiny) bplus(i)=0
-            bminus(i)=0
-            arg=-dwc+i*betai/2
-            bminus(i)=exp(arg)*bn(i)
-            if (bminus(i).lt.tiny) bminus(i)=0
-         else
-            bplus(i)=0
-            bminus(i)=0
-         endif
+         arg=-dwc-i*betai/2+lnb
+         if (arg.gt.lnt) bplus(i)=exp(arg)
+         bminus(i)=0
+         arg=-dwc+i*betai/2+lnb
+         if (arg.gt.lnt) bminus(i)=exp(arg)
       enddo
    else
+      !--generate higher orders by reverse recursion
+      bn(imax)=0
+      bn(imax-1)=1
+      i=imax-1
+      do while (i.gt.1)
+         bn(i-1)=bn(i+1)+i*(2/x)*bn(i)
+         i=i-1
+         if (bn(i).ge.big) then
+            do j=i,imax
+               bn(j)=bn(j)/big
+            enddo
+         endif
+      enddo
+      rat=bessi1/bn(1)
+      do i=1,imax
+         bn(i)=bn(i)*rat
+         if (bn(i).lt.tiny) bn(i)=0
+      enddo
+
+      !--apply exponential terms to bessel functions
       bzero=bessi0*exp(-dwc+x)
       do i=1,imax
          bminus(i)=0
          bplus(i)=0
          if (bn(i).ne.zero) then
-            bplus(i)=0
             arg=-dwc-i*betai/2+x
             bplus(i)=exp(arg)*bn(i)
             if (bplus(i).lt.tiny) bplus(i)=0
-            bminus(i)=0
             arg=-dwc+i*betai/2+x
             bminus(i)=exp(arg)*bn(i)
             if (bminus(i).lt.tiny) bminus(i)=0
-         else
-            bplus(i)=0
-            bminus(i)=0
          endif
       enddo
    endif
    return
    end subroutine bfact
+
+   subroutine sortdd(w,b,n)
+   !--------------------------------------------------------------------
+   ! Sort the discrete lines w (weights) and b (positions) in
+   ! decreasing order of w (heapsort).
+   ! Called by discre.
+   !--------------------------------------------------------------------
+   integer::n
+   real(kr)::w(n),b(n)
+   integer::i,ir,j,l
+   real(kr)::ww,bb
+
+   if (n.lt.2) return
+   l=n/2+1
+   ir=n
+   do
+      if (l.gt.1) then
+         l=l-1
+         ww=w(l)
+         bb=b(l)
+      else
+         ww=w(ir)
+         bb=b(ir)
+         w(ir)=w(1)
+         b(ir)=b(1)
+         ir=ir-1
+         if (ir.eq.1) then
+            w(1)=ww
+            b(1)=bb
+            return
+         endif
+      endif
+      i=l
+      j=l+l
+      do while (j.le.ir)
+         if (j.lt.ir) then
+            if (w(j).gt.w(j+1)) j=j+1
+         endif
+         if (ww.gt.w(j)) then
+            w(i)=w(j)
+            b(i)=b(j)
+            i=j
+            j=j+j
+         else
+            j=ir+1
+         endif
+      enddo
+      w(i)=ww
+      b(i)=bb
+   enddo
+   end subroutine sortdd
 
    subroutine bfill(bex,rdbex,nbx,betan,nbetan,maxbb)
    !--------------------------------------------------------------------
@@ -1877,8 +2047,9 @@ contains
    real(kr)::x,alph,wt,tbart
    real(kr)::bex(maxbb),rdbex(maxbb),sex(maxbb),betan(nbetan)
    ! internals
-   integer::k1,k2,k3,idone
-   real(kr)::sv,ex,ss1,ss3
+   integer::k1,k2,k3,idone,kq
+   real(kr)::sv,ex,ss1,ss3,ssq
+   logical::qok
    real(kr),parameter::slim=-225.e0_kr
    real(kr),parameter::zero=0
 
@@ -1889,7 +2060,8 @@ contains
       else
          ex=-(wt*alph-abs(x))**2/(4*wt*alph*tbart)
          if (x.gt.zero) ex=ex-x
-         sv=exp(ex)/(4*pi*wt*alph*tbart)
+         ! SCT with correct Gaussian width
+         sv=exp(ex)/sqrt(4*pi*wt*alph*tbart)
       endif
       sint=sv
       return
@@ -1927,6 +2099,27 @@ contains
       ss3=log(sex(k3))
    endif
    ex=((bex(k3)-x)*ss1+(x-bex(k1))*ss3)*rdbex(k1)
+   !--quadratic in ln(sex), with the closer third node
+   kq=0
+   if (k3.lt.nbx) kq=k3+1
+   if (k1.gt.1) then
+      if (kq.eq.0) then
+         kq=k1-1
+      else if (x-bex(k1-1).lt.bex(k3+1)-x) then
+         kq=k1-1
+      endif
+   endif
+   if (kq.gt.0) then
+      if (sex(k1).gt.zero.and.sex(k3).gt.zero.and.sex(kq).gt.zero) then
+         ssq=log(sex(kq))
+         if (kq.gt.k3) then
+            qok=abs(ss3-ss1).le.qstep.and.abs(ssq-ss3).le.qstep
+         else
+            qok=abs(ss1-ssq).le.qstep.and.abs(ss3-ss1).le.qstep
+         endif
+         if (qok) ex=qlag(x,bex(k1),ss1,bex(k3),ss3,bex(kq),ssq)
+      endif
+   endif
    sv=0
    if (ex.gt.slim) sv=exp(ex)
    sint=sv
@@ -1947,22 +2140,26 @@ contains
    use physics ! provides pi,bk,hbar,ev
    use mainio  ! provides nsyso
    use util    ! provides timer
+   use endf    ! provides terp1
    ! externals
    integer::itemp
    real(kr)::temp
    ! internals
    real(kr)::time,tev,sc,de,x,amassm,bp,sampc,sampi
-   real(kr)::snlg,betap,bn,ex,add,snlk,up,down,sn,snorm
+   real(kr)::snlg,betap,bn,ex,add,snlk,up,down,snorm
    real(kr)::sum0,bel,ff1,ff2,ff1l,ff2l,tmp,total,be
-   real(kr)::al,alp,waven,y,sk,swe,swo,wt,tbart,pj
-   integer::i,j,k,l,jj,jjmax,jprt,nbx,maxbb
-   integer::law,nal,iprt,ipo,jt1,lp,jp,nbe
+   real(kr)::al,alp,waven,y,sk,swe,swo,wt,tbart,pj,Dm
+   real(kr)::addbeta0,addbeta1,addbeta1a,addbeta1b,ap,apa,apb
+   integer::i,j,k,l,jj,jjmax,jprt,nbx,maxbb,kk,kk2,sn_size
+   integer::law,nal,iprt,ipo,jt1,lp,jp,nbe,jpmax
    real(kr),dimension(:),allocatable::betan,exb
-   real(kr),dimension(:),allocatable::bex,rdbex,sex
+   real(kr),dimension(:),allocatable::bex,rdbex,sex,sexa,sexb
+   real(kr),dimension(:,:),allocatable::sn
    real(kr),parameter::pmass=1.6726231e-24_kr
    real(kr),parameter::dmass=3.343586e-24_kr
    real(kr),parameter::deh=0.0147e0_kr
    real(kr),parameter::ded=0.0074e0_kr
+   real(kr),parameter::dhh=0.7414e0_kr
    real(kr),parameter::sampch=0.356e0_kr
    real(kr),parameter::sampcd=0.668e0_kr
    real(kr),parameter::sampih=2.526e0_kr
@@ -1987,6 +2184,10 @@ contains
    allocate(bex(maxbb))
    allocate(rdbex(maxbb))
    allocate(sex(maxbb))
+   sn_size = 2*nbeta-1
+   allocate(sn(nalpha,sn_size))
+   allocate(sexa(maxbb))
+   allocate(sexb(maxbb))
 
    !--set up constants
    tev=bk*abs(temp)
@@ -1997,19 +2198,32 @@ contains
    if (law.gt.3) de=ded
    x=de/tev
    if (law.gt.3) then
-     amassm=6.69E-24_kr
-     ! amassm=2*(amassd+amasse)*amu*ev/(clight*clight)
-     sampc=sampcd
-     bp=hbar/2*sqrt(2/ded/ev/dmass)/angst
-     sampi=sampid
+      amassm=6.69E-24_kr
+      ! amassm=2*(amassd+amasse)*amu*ev/(clight*clight)
+      sampc=sampcd
+      bp=hbar/2*sqrt(2/ded/ev/dmass)/angst
+      sampi=sampid
    else
-     amassm=3.3464e-24_kr
-     ! amassm=2*(amassp+amasse)*amu*ev/(clight*clight)
-     sampc=sampch
-     bp=hbar/2*sqrt(2/deh/ev/pmass)/angst
-     sampi=sampih
+      amassm=3.3464e-24_kr
+      ! amassm=2*(amassp+amasse)*amu*ev/(clight*clight)
+      sampc=sampch
+      bp=hbar/2*sqrt(2/deh/ev/pmass)/angst
+      sampi=sampih
+   endif
+   if (nsk.ne.0) then
+      !--Granada model: scattering lengths from spr and cfrac,
+      !--and the H-H (D-D) distance
+      sampc=sqrt(cfrac*spr/(4*pi))/(awr/(1+awr))
+      sampi=sqrt((1-cfrac)*spr/(4*pi))/(awr/(1+awr))
+      bp=dhh/2
    endif
    wt=twt+tbeta
+   if (nsk.eq.0) then
+      !--add the weight from oscillators
+      do i=1,nd
+         wt=wt+adel(i)
+      enddo
+   endif
    tbart=tempf(itemp)/tempr(itemp)
 
    !--main alpha loop
@@ -2020,6 +2234,10 @@ contains
       alp=wt*al
       waven=angst*sqrt(amassm*tev*ev*al)/hbar
       y=bp*waven
+      !--highest final rotational state: sum (2l+1) j_l(y)**2 = 1
+      !--needs l up to about y + 4 y**(1/3)
+      jpmax=max(9,int(y+4*y**(1.e0_kr/3)+6))
+      if (mod(jpmax,2).eq.0) jpmax=jpmax+1
       if (iprt.eq.1) write(nsyso,'(//i4,3x,''alpha='',f10.5)') nal,al
       sk=terpk(ska,nka,dka,waven)
       if (nokap.eq.1) sk=1
@@ -2030,17 +2248,32 @@ contains
       endif
 
       !--spin-correlation factors
-      if (law.eq.2) swe=sampi**2/3
-      if (law.eq.2) swo=sk*sampc**2+2*sampi**2/3
-      if (law.eq.3) swe=sk*sampc**2
-      if (law.eq.3) swo=sampi**2
-      if (law.eq.4) swe=sk*sampc**2+5*sampi**2/8
-      if (law.eq.4) swo=3*sampi**2/8
-      if (law.eq.5) swe=3*sampi**2/4
-      if (law.eq.5) swo=sk*sampc**2+sampi**2/4
+      if (nsk.eq.0) then
+         !--original H2, D2 inputs
+         if (law.eq.2) swe=sampi**2/3
+         if (law.eq.2) swo=sk*sampc**2+2*sampi**2/3
+         if (law.eq.3) swe=sk*sampc**2
+         if (law.eq.3) swo=sampi**2
+         if (law.eq.4) swe=sk*sampc**2+5*sampi**2/8
+         if (law.eq.4) swo=3*sampi**2/8
+         if (law.eq.5) swe=3*sampi**2/4
+         if (law.eq.5) swo=sk*sampc**2+sampi**2/4
+      else
+         !--new H2, D2 inputs (Granada model)
+         if (law.eq.2) swe=sampi**2/3
+         if (law.eq.2) swo=sampc**2+2*sampi**2/3
+         if (law.eq.3) swe=sampc**2
+         if (law.eq.3) swo=sampi**2
+         if (law.eq.4) swe=sampc**2+5*sampi**2/8
+         if (law.eq.4) swo=3*sampi**2/8
+         if (law.eq.5) swe=3*sampi**2/4
+         if (law.eq.5) swo=sampc**2+sampi**2/4
+      endif
+      !--weight for the S_out term
       snorm=sampi**2+sampc**2
       swe=swe/snorm
       swo=swo/snorm
+      Dm=2.d0*sampc**2/snorm
 
       !--prepare arrays for sint
       if (nal.eq.1) then
@@ -2052,87 +2285,215 @@ contains
          enddo
          call bfill(bex,rdbex,nbx,betan,nbeta,maxbb)
       endif
-      call exts(ssm(1,nal,itemp),sex,exb,betan,nbeta,maxbb)
+      if (nsk.eq.0) then
+         call exts(ssm(1,nal,itemp),sex,exb,betan,nbeta,maxbb)
 
-      !--loop over all beta values
-      !    results for positive beta go into ssp
-      !    results for negative beta go into ssm
-      jjmax=2*nbeta-1
+         !--loop over all beta values
+         !    results for positive beta go into ssp
+         !    results for negative beta go into ssm
+         jjmax=2*nbeta-1
+         do jj=1,jjmax
+            if (jj.lt.nbeta) k=nbeta-jj+1
+            if (jj.ge.nbeta) k=jj-nbeta+1
+            be=betan(k)
+            if (jj.lt.nbeta) be=-be
+            sn(nal,jj)=0
+            total=0
+
+            !--loop over all oscillators
+            ! para-h2: j=0,2,....; ortho-h2: j=1,3,....
+            ! ortho-d2: j=0,2,....; para-d2: j=1,3,....
+            ipo=1
+            if (law.eq.2.or.law.eq.5) ipo=2
+            jt1=2*jterm
+            if (ipo.eq.2) jt1=jt1+1
+            do l=ipo,jt1,2
+               j=l-1
+               call bt(j,pj,x)
+
+               !--sum over even values of j-prime
+               snlg=0
+               do lp=1,jpmax+1,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swe*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlg=snlg+tmp*add
+               enddo
+
+               !--sum over the odd values of j-prime
+               snlk=0
+               do lp=2,jpmax+1,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swo*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlk=snlk+tmp*add
+               enddo
+
+               !--continue the j loop
+               sn(nal,jj)=sn(nal,jj)+snlg+snlk
+            enddo
+            if (jj.eq.1.and.iprt.eq.1) then
+               write(nsyso,'(5x,''total'',5x,f10.6)') total
+            endif
+         enddo
+      else
+         !--loop over all beta values
+         !    results for positive beta go into ssp
+         !    results for negative beta go into ssm
+         jjmax=2*nbeta-1
+         call exts(ssm(1,nal,itemp),sex,exb,betan,nbeta,maxbb)
+         if (nsk.eq.2) then
+            !--Skold: S at alpha/S(kappa), interpolated between the
+            !--two tabulated alpha values that bracket it
+            ap=al/sk
+            do kk2=1,nalpha
+               kk=kk2
+               if (ap.lt.alpha(kk2)*sc/arat) exit
+            enddo
+            if (kk.eq.1) kk=2
+            apa=alpha(kk-1)*sc/arat
+            apb=alpha(kk)*sc/arat
+            call exts(ssm(1,kk-1,itemp),sexa,exb,betan,nbeta,maxbb)
+            call exts(ssm(1,kk,itemp),sexb,exb,betan,nbeta,maxbb)
+         endif
+         do jj=1,jjmax
+            if (jj.lt.nbeta) k=nbeta-jj+1
+            if (jj.ge.nbeta) k=jj-nbeta+1
+            be=betan(k)
+            if (jj.lt.nbeta) be=-be
+            sn(nal,jj)=0
+            total=0
+
+            !--loop over all oscillators
+            ! para-h2: j=0,2,....; ortho-h2: j=1,3,....
+            ! ortho-d2: j=0,2,....; para-d2: j=1,3,....
+            ipo=1
+            if (law.eq.2.or.law.eq.5) ipo=2
+            jt1=2*jterm
+            if (ipo.eq.2) jt1=jt1+1
+            do l=ipo,jt1,2
+               j=l-1
+               call bt(j,pj,x)
+
+               !--sum over even values of j-prime
+               snlg=0
+               do lp=1,jpmax+1,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swe*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlg=snlg+tmp*add
+               enddo
+
+               !--sum over the odd values of j-prime
+               snlk=0
+               do lp=2,jpmax+1,2
+                  jp=lp-1
+                  betap=(-j*(j+1)+jp*(jp+1))*x/2
+                  tmp=(2*jp+1)*pj*swo*4*sumh(j,jp,y)
+                  if (jj.eq.1.and.tmp.ge.small) then
+                     write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
+                     total=total+tmp
+                  endif
+                  bn=be+betap
+                  if (ifree.eq.1) then
+                     ex=-(alp-abs(bn))**2/(4*alp)
+                     if (bn.gt.zero) ex=ex-bn
+                     add=exp(ex)/sqrt(4*pi*alp)
+                  else
+                     add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
+                       betan,nbeta,maxbb)
+                  endif
+                  snlk=snlk+tmp*add
+               enddo
+
+               !--continue the j loop
+               sn(nal,jj)=sn(nal,jj)+snlg+snlk
+            enddo
+            if (jj.eq.1.and.iprt.eq.1) then
+               write(nsyso,'(5x,''total'',5x,f10.6)') total
+            endif
+
+            !--S_out term
+            if (nsk.eq.1) then
+               !--Vineyard approximation
+               addbeta0=sint(be,bex,rdbex,sex,nbx,al,wt,tbart,betan,nbeta,&
+                 maxbb)
+               sn(nal,jj)=sn(nal,jj)+(sk-1)*sjbes(0,y)**2*addbeta0*Dm
+            else if (nsk.eq.2) then
+               !--Skold approximation
+               addbeta0=sint(be,bex,rdbex,sex,nbx,al,wt,tbart,betan,nbeta,&
+                 maxbb)
+               addbeta1a=sint(be,bex,rdbex,sexa,nbx,apa,wt,tbart,betan,&
+                 nbeta,maxbb)
+               addbeta1b=sint(be,bex,rdbex,sexb,nbx,apb,wt,tbart,betan,&
+                 nbeta,maxbb)
+               if (addbeta1a.gt.zero.and.addbeta1b.gt.zero) then
+                  call terp1(apa,addbeta1a,apb,addbeta1b,ap,addbeta1,5)
+               else
+                  call terp1(apa,addbeta1a,apb,addbeta1b,ap,addbeta1,2)
+               endif
+               addbeta1=addbeta1*sk
+               sn(nal,jj)=sn(nal,jj)+&
+                 (addbeta1-addbeta0)*sjbes(0,y)**2*Dm
+            endif
+         enddo
+      endif
+
+   !--continue the alpha loop
+   enddo
+
+   !--store the results in ssm and ssp
+   do nal=1,nalpha
       do jj=1,jjmax
          if (jj.lt.nbeta) k=nbeta-jj+1
          if (jj.ge.nbeta) k=jj-nbeta+1
-         be=betan(k)
-         if (jj.lt.nbeta) be=-be
-         sn=0
-         total=0
-
-         !--loop over all oscillators
-         ! para-h2: j=0,2,....; ortho-h2: j=1,3,....
-         ! ortho-d2: j=0,2,....; para-d2: j=1,3,....
-         ipo=1
-         if (law.eq.2.or.law.eq.5) ipo=2
-         jt1=2*jterm
-         if (ipo.eq.2) jt1=jt1+1
-         do l=ipo,jt1,2
-            j=l-1
-            call bt(j,pj,x)
-
-            !--sum over even values of j-prime
-            snlg=0
-            do lp=1,10,2
-               jp=lp-1
-               betap=(-j*(j+1)+jp*(jp+1))*x/2
-               tmp=(2*jp+1)*pj*swe*4*sumh(j,jp,y)
-               if (jj.eq.1.and.tmp.ge.small) then
-                  write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
-                  total=total+tmp
-               endif
-               bn=be+betap
-               if (ifree.eq.1) then
-                  ex=-(alp-abs(bn))**2/(4*alp)
-                  if (bn.gt.zero) ex=ex-bn
-                  add=exp(ex)/sqrt(4*pi*alp)
-               else
-                  add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
-                    betan,nbeta,maxbb)
-               endif
-               snlg=snlg+tmp*add
-            enddo
-
-            !--sum over the odd values of j-prime
-            snlk=0
-            do lp=2,10,2
-               jp=lp-1
-               betap=(-j*(j+1)+jp*(jp+1))*x/2
-               tmp=(2*jp+1)*pj*swo*4*sumh(j,jp,y)
-               if (jj.eq.1.and.tmp.ge.small) then
-                  write(nsyso,'(5x,f10.4,2i4,f10.6)') betap,j,jp,tmp
-                  total=total+tmp
-               endif
-               bn=be+betap
-               if (ifree.eq.1) then
-                  ex=-(alp-abs(bn))**2/(4*alp)
-                  if (bn.gt.zero) ex=ex-bn
-                  add=exp(ex)/sqrt(4*pi*alp)
-               else
-                  add=sint(bn,bex,rdbex,sex,nbx,al,wt,tbart,&
-                    betan,nbeta,maxbb)
-               endif
-               snlk=snlk+tmp*add
-            enddo
-
-            !--continue the j loop
-            sn=sn+snlg+snlk
-         enddo
-         if (jj.eq.1.and.iprt.eq.1) then
-            write(nsyso,'(5x,''total'',5x,f10.6)') total
-         endif
-
-         !--continue the beta loop
-         if (jj.le.nbeta) ssm(k,nal,itemp)=sn
-         if (jj.ge.nbeta) ssp(k,nal,itemp)=sn
+         if (jj.le.nbeta) ssm(k,nal,itemp)=sn(nal,jj)
+         if (jj.ge.nbeta) ssp(k,nal,itemp)=sn(nal,jj)
       enddo
+   enddo
 
+   do nal=1,nalpha
+      iprt=mod(nal-1,naint)+1
+      if (nal.eq.nalpha) iprt=1
       !--record the results
       if (iprt.eq.1) write(nsyso,&
         '(/4x,'' beta'',7x,''s(alpha,beta)'',7x,&
@@ -2179,6 +2540,9 @@ contains
    deallocate(bex)
    deallocate(exb)
    deallocate(betan)
+   deallocate(sn)
+   deallocate(sexa)
+   deallocate(sexb)
    return
    end subroutine coldh
 
@@ -2217,7 +2581,7 @@ contains
    integer::j,jp
    real(kr)::y
    ! internals
-   integer::imk,ipk1,mpk,ipk,n,n1
+   integer::imk,ipk1,ipk,n,n1
    real(kr)::sum1,sum2
 
    if (j.eq.0) then
@@ -2228,12 +2592,7 @@ contains
       sum1=0
       imk=iabs(j-jp)+1
       ipk1=j+jp+1
-      mpk=ipk1-imk
-      if (mpk.le.9) then
-         ipk=ipk1
-      else
-         ipk=imk+9
-      endif
+      ipk=ipk1
       do n=imk,ipk
          n1=n-1
          sum1=sum1+(sjbes(n1,y)*cn(j,jp,n1))**2
